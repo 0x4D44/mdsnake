@@ -1,0 +1,24 @@
+{
+  "name": "coil",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Coil — a discrete 2.5D snake puzzle game (gravity + your own body).",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "three": "^0.169.0"
+  },
+  "devDependencies": {
+    "@types/three": "^0.169.0",
+    "typescript": "^5.6.0",
+    "vite": "^5.4.0",
+    "vitest": "^2.1.0"
+  }
+}
