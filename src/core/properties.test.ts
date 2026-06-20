@@ -9,7 +9,7 @@
 // a later red is unambiguously the refactor's fault.
 
 import { describe, expect, it } from "vitest";
-import { anchor, buildState, DIRS, key, move, settle, strike } from "./game";
+import { anchor, buildState, deposit, DIRS, key, move, settle, strike } from "./game";
 import { PRESETS } from "./types";
 import type { CellType, Dir, Entity, EntityKind, GameState, LevelDef } from "./types";
 
@@ -19,6 +19,7 @@ const wall = (x: number, y: number) => ({ x, y, type: "wall" as CellType });
 const grip = (x: number, y: number) => ({ x, y, type: "anchor" as CellType });
 const plate = (x: number, y: number, id: string) => ({ x, y, type: "plate" as CellType, trigger: id });
 const gate = (x: number, y: number, id: string) => ({ x, y, type: "gate" as CellType, door: id });
+const object = (x: number, y: number) => ({ x, y, type: "object" as CellType });
 const floorRow = (y: number, x0: number, x1: number) => {
   const c = [];
   for (let x = x0; x <= x1; x++) c.push(wall(x, y));
@@ -50,6 +51,10 @@ function deepEqual(a: GameState, b: GameState): boolean {
     // Per-segment state must match too (Inc 2: `anchored`), normalising the
     // intent flag so undefined and false compare equal.
     if (Boolean(a.snake[i].anchored) !== Boolean(b.snake[i].anchored)) return false;
+    // Inc 4: a swallowed `carry` is per-segment state. Presets are frozen
+    // singletons read from the same table, so referential identity is the right
+    // test (an absent carry compares equal only to another absent carry).
+    if (a.snake[i].carry !== b.snake[i].carry) return false;
   }
   if (a.cells.size !== b.cells.size) return false;
   for (const [k, v] of a.cells) {
@@ -75,6 +80,12 @@ const VERBS: VerbReg[] = [
   // wall); on every other corpus state it must no-op (same ref) — covered by
   // P-NOOP-IDENTITY.
   { name: "anchor", fn: (s) => anchor(s) },
+  // Inc 4: deposit is directional (drops the head's carry into the cell in `dir`).
+  // The battery iterates it over the corpus exactly like the movement verbs. Its
+  // real carry/deposit behaviour is exercised by the carry corpus states (15-17,
+  // a snake holding a swallowed block); on every state with an EMPTY gut it must
+  // no-op (same ref) — covered by P-NOOP-IDENTITY.
+  { name: "deposit", fn: deposit },
 ];
 const ALL_DIRS: { name: string; dir: Dir }[] = [
   { name: "up", dir: DIRS.up },
@@ -199,6 +210,47 @@ const CORPUS: GameState[] = [
       cells: [...floorRow(0, 0, 6), plate(1, 1, "g1"), gate(3, 1, "g1")],
     }),
   ),
+  // 15: Inc-4 carry state — a snake that has SWALLOWED an object block and now
+  //     holds it on its head (carry non-null). Built by swallowing a pickup, so
+  //     it exercises the deposit verb (drop right into empty air, drop down/left
+  //     blocked by floor/body) and the carry round-trip under the battery (P-UNDO
+  //     extended to non-null carry, P-CONSERVATION carry-adds-0, P-NOOP-IDENTITY
+  //     on blocked deposits). The floor supports it, so it is at rest.
+  (() => {
+    const s = buildState(
+      lvl({
+        snake: [{ x: 2, y: 1 }, { x: 1, y: 1 }],
+        cells: [...floorRow(0, 0, 6), object(3, 1)],
+      }),
+    );
+    return move(s, DIRS.right); // step onto the object -> swallow -> head carries it
+  })(),
+  // 16: Inc-4 carry state with a CLEAR cell above the head, so deposit UP places
+  //     the block and resolves with the snake still grounded (a successful deposit
+  //     path under the battery: not a no-op, so P-NOOP-IDENTITY is vacuous for it
+  //     but P-PURITY/P-DETERMINISM/P-CONSERVATION still bind).
+  (() => {
+    const s = buildState(
+      lvl({
+        snake: [{ x: 2, y: 1 }, { x: 1, y: 1 }],
+        cells: [...floorRow(0, 0, 6), object(3, 1)],
+      }),
+    );
+    return move(s, DIRS.right);
+  })(),
+  // 17: Inc-4 FULL-GUT state — a snake carrying a block right up against ANOTHER
+  //     pickup, so a swallow attempt (move toward it) must no-op (full gut), and
+  //     deposit into the occupied-by-pickup cell must no-op. Exercises the
+  //     full-gut and blocked-deposit no-op identity together.
+  (() => {
+    const s = buildState(
+      lvl({
+        snake: [{ x: 2, y: 1 }, { x: 1, y: 1 }],
+        cells: [...floorRow(0, 0, 6), object(3, 1), object(4, 1)],
+      }),
+    );
+    return move(s, DIRS.right); // swallow the first; the second remains ahead
+  })(),
 ];
 
 // Sanity: the corpus pins the terminal seeds we rely on.
@@ -208,7 +260,7 @@ describe("CORPUS-INC1", () => {
     expect(CORPUS.some((s) => s.status === "dead")).toBe(true);
   });
   it("has the documented size", () => {
-    expect(CORPUS.length).toBe(15);
+    expect(CORPUS.length).toBe(18);
   });
   it("includes a grip-cell state for the anchor verb", () => {
     expect(CORPUS.some((s) => [...s.cells.values()].some((e) => e.grip === true))).toBe(true);
@@ -216,6 +268,9 @@ describe("CORPUS-INC1", () => {
   it("includes a mechanism (plate + gate) state", () => {
     expect(CORPUS.some((s) => [...s.cells.values()].some((e) => e.trigger !== undefined))).toBe(true);
     expect(CORPUS.some((s) => [...s.cells.values()].some((e) => e.door !== undefined))).toBe(true);
+  });
+  it("includes a carry state (head holding a swallowed block) for the deposit verb", () => {
+    expect(CORPUS.some((s) => s.snake[0].carry !== undefined)).toBe(true);
   });
 });
 
@@ -275,23 +330,40 @@ describe("P-UNDO", () => {
 });
 
 describe("P-CONSERVATION", () => {
-  it("non-eating action keeps length; eating action grows by exactly +1", () => {
+  // Total block matter = swallowable/deposited blocks in cells PLUS blocks held in
+  // a gut. A swallow moves a block cell->gut; a deposit moves gut->cell; neither
+  // creates or destroys matter, so this count is conserved by EVERY action.
+  const blocks = (s: GameState): number => {
+    let n = 0;
+    for (const e of s.cells.values()) if (e.pickup === true) n++;
+    for (const seg of s.snake) if (seg.carry !== undefined) n++;
+    return n;
+  };
+
+  it("length grows only by eating fruit (+1); swallow/deposit keep length; block matter is conserved", () => {
     eachCase((s, verb, d, idx) => {
-      if (s.status !== "play") return; // terminal: no length change possible
+      if (s.status !== "play") return; // terminal: no change possible
       const before = s.snake.length;
       const beforeFruit = [...s.cells.values()].filter((e) => e.eat === true).length;
+      const beforeBlocks = blocks(s);
       const next = verb.fn(s, d.dir);
       const after = next.snake.length;
       const afterFruit = [...next.cells.values()].filter((e) => e.eat === true).length;
       const ate = afterFruit < beforeFruit;
       const tag = `${verb.name}/${d.name} @${idx}`;
       if (ate) {
-        // Exactly one fruit consumed, exactly +1 length.
+        // Exactly one fruit consumed, exactly +1 length. (Fruit and pickup are
+        // disjoint flags, so eating never touches the block count.)
         expect(beforeFruit - afterFruit, tag).toBe(1);
         expect(after - before, tag).toBe(1);
       } else {
+        // Swallow (eat-pickup) and deposit both keep length unchanged; only fruit
+        // grows the snake.
         expect(after, tag).toBe(before);
       }
+      // Block matter is conserved by every action (a swallow/deposit only RELOCATES
+      // a block between a cell and a gut; everything else leaves it untouched).
+      expect(blocks(next), `${tag} block-conservation`).toBe(beforeBlocks);
     });
   });
 });

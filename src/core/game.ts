@@ -18,7 +18,7 @@
 // mutating the input. That makes undo a trivial snapshot stack and the rules
 // straightforward to test.
 
-import type { Dir, Entity, GameState, LevelDef, Vec } from "./types";
+import type { Dir, Entity, GameState, LevelDef, Segment, Vec } from "./types";
 import { PRESETS } from "./types";
 
 export const key = (v: Vec): string => `${v.x},${v.y}`;
@@ -90,24 +90,54 @@ function checkWin(s: GameState): GameState {
  * One grid step of the head in `dir`, with NO gravity. Returns the new state,
  * or null if the step is blocked (a `solid` cell, or the snake's own body —
  * excluding the tail cell, which vacates unless the step eats).
+ *
+ * The gut is the HEAD's: a swallowed `carry` always rides on `snake[0]`. On every
+ * step it moves to the NEW head (and off the old one), so it cannot be left behind
+ * as the body shifts forward — otherwise it would slide down the body and vanish
+ * off the tail. Three interactions with the target cell, in precedence order:
+ *   - SWALLOW (Inc 4): a `pickup` cell is steppable EVEN IF solid — stepping onto
+ *     it stores the entity on the new head as `carry` (length UNCHANGED, like a
+ *     shift), clears the cell, and the gut must be empty (a full gut blocks it).
+ *   - EAT: an `eat` cell grows the snake (+1, tail kept) and clears the cell; the
+ *     gut (if any) rides forward onto the new head.
+ *   - PLAIN: otherwise a normal step (tail vacates); the gut rides onto the new head.
  */
 function tryStep(s: GameState, dir: Dir): GameState | null {
   const head = s.snake[0];
   const target: Vec = { x: head.x + dir.x, y: head.y + dir.y };
   const t = cellAt(s, target);
-  if (t?.solid === true) return null;
 
-  const eating = t?.eat === true;
-  // When not eating, the tail vacates this turn, so its current cell is free.
+  // SWALLOW takes precedence over solid: a pickup block is steppable-to-swallow.
+  // But only if the head's gut is empty — a full gut means the cell blocks like
+  // any solid (no-op), exactly as if there were nothing to swallow it into.
+  const swallowing = t?.pickup === true && head.carry === undefined;
+  if (t?.solid === true && !swallowing) return null;
+
+  const eating = !swallowing && t?.eat === true;
+  // When neither eating nor swallowing, the tail vacates, so its cell is free.
   const body = eating ? s.snake : s.snake.slice(0, -1);
   if (body.some((seg) => eq(seg, target))) return null;
 
-  const snake = eating
-    ? [target, ...s.snake] // grow: keep the tail
-    : [target, ...s.snake.slice(0, -1)]; // shift: drop the tail
+  // The gut after this step: a swallow fills it with the swallowed entity; any
+  // other step carries the old head's gut forward onto the new head.
+  const carry = swallowing ? t : head.carry;
+  const newHead: Segment = carry === undefined ? { ...target } : { ...target, carry };
 
-  if (!eating) return { ...s, snake };
+  // GROW keeps the tail; SHIFT/SWALLOW drop it (length unchanged). The retained
+  // body follows the new head. Its FIRST element is the OLD head, whose gut has
+  // moved to the new head — so strip its `carry` (else the block double-counts and
+  // then slides off the tail). For a length-1 snake `kept` is empty, so the snake
+  // stays length-1 on a shift, exactly as before.
+  const kept = eating ? s.snake : s.snake.slice(0, -1);
+  const trail =
+    kept.length > 0 && kept[0].carry !== undefined
+      ? [(({ carry: _omit, ...rest }) => rest)(kept[0]), ...kept.slice(1)]
+      : kept;
+  const snake = [newHead, ...trail];
 
+  if (!swallowing && !eating) return { ...s, snake };
+
+  // swallow or eat both clear the target cell.
   const cells = new Map(s.cells);
   cells.delete(key(target));
   return { ...s, snake, cells };
@@ -297,6 +327,51 @@ export function anchor(s: GameState): GameState {
     i === idx ? { ...seg, anchored: !seg.anchored } : seg,
   );
   return { ...s, snake };
+}
+
+/**
+ * Deposit the head's carried entity into the adjacent cell in `dir` (Inc 4,
+ * §2.2.8 / §2.2.9). The carried entity becomes a normal `cells` entity again — a
+ * deposited `object` (solid + supports) is then static structure: it blocks a
+ * full-gutted snake's step and bears the snake's weight from below (the shed-skin
+ * decoy as a step / wall, T-DECOY). This is the "deposit modifier", not a fresh
+ * verb: it reuses the carry machinery.
+ *
+ * NOTE on "holds a plate" (§2.2.9): a deposited block presses a plate / holds a
+ * gate ONLY by occupying that mechanism's cell, but the single-entity-per-cell
+ * `cells` map cannot hold both a plate/gate AND a block at one coordinate, and the
+ * mechanism pass (§2.2.6) keys occupancy off SNAKE SEGMENTS, not cell entities. So
+ * the literal "plate-holder" use is not expressible in this model without a layered
+ * cell representation; the implemented decoy is the static-structure (support/wall)
+ * half of T-DECOY. (Reported as a blocker.)
+ *
+ * - NO-OP (same reference) if the state is terminal, the head carries nothing, or
+ *   the target cell is blocked/occupied (a `cells` entity is present, or any snake
+ *   segment sits there) — so the shell's `next === state` no-op detection holds.
+ * - Pure: returns a new state with a fresh head (carry cleared), a shared tail,
+ *   and a new cells map with the deposited entity.
+ * - Settle is run via `resolve`: a deposited solid can newly ground a snake that
+ *   was about to fall, and the deposit can otherwise leave the snake unsupported.
+ *   The deposit itself moves no segment, so on solid ground the resolve is a
+ *   referential no-op of the snake; only the cells map changed.
+ */
+export function deposit(s: GameState, dir: Dir): GameState {
+  if (s.status !== "play") return s;
+  const head = s.snake[0];
+  const carried = head.carry;
+  if (carried === undefined) return s; // empty gut: nothing to deposit
+  const target: Vec = { x: head.x + dir.x, y: head.y + dir.y };
+  // The target must be empty: no existing cell entity AND no snake segment.
+  if (cellAt(s, target) !== undefined) return s;
+  if (s.snake.some((seg) => eq(seg, target))) return s;
+
+  // Drop the carry from the head; place the entity into the target cell.
+  const newHead = { ...head };
+  delete newHead.carry;
+  const snake = [newHead, ...s.snake.slice(1)];
+  const cells = new Map(s.cells);
+  cells.set(key(target), carried);
+  return resolve({ ...s, snake, cells });
 }
 
 /** Build a live, already-settled GameState from a static level definition.

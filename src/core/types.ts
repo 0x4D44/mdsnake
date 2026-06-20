@@ -21,6 +21,11 @@ export interface Segment {
   x: number;
   y: number;
   anchored?: boolean;
+  /** A swallowed entity carried on this segment (Inc 4 / World 6, §2.2.8). Eating
+   *  a `pickup` cell stores it here on the HEAD instead of growing the snake; the
+   *  `deposit` verb drops it back into an adjacent empty cell. Travels with the
+   *  segment when it moves; absent === empty gut. */
+  carry?: Entity;
 }
 
 export type Status = "play" | "won" | "dead";
@@ -68,12 +73,19 @@ export interface Entity {
    *  (collision/gravity/win). Pinned by CORE-REGRESSION-HEAT (§4.3): a known room
    *  solves identically with heat cells sprinkled in vs without (§2.2.7). */
   heat?: boolean;
+  /** Swallowable: stepping onto it stores it on the head segment as `carry`
+   *  instead of growing the snake, and clears the cell (Inc 4 / World 6,
+   *  §2.2.8). Swallowing takes PRECEDENCE over `solid` in `tryStep` — a `pickup`
+   *  block is steppable-to-swallow even though, once DEPOSITED, the same entity is
+   *  a normal solid/support cell again (the decoy, §2.2.9). The carried entity is
+   *  stored verbatim, so its `solid`/`supports` flags reactivate on deposit. */
+  pickup?: boolean;
   // --- added only when its world arrives (the §2.3 "no on-ramps" ledger) ---
-  // pickup / egg are deliberately ABSENT until the increment that uses them.
+  // egg is deliberately ABSENT until the increment that uses it.
 }
 
 /** The preset keys. Grows with each increment that adds an entity. */
-export type EntityKind = "wall" | "fruit" | "exit" | "anchor" | "plate" | "gate" | "heatlamp";
+export type EntityKind = "wall" | "fruit" | "exit" | "anchor" | "plate" | "gate" | "heatlamp" | "object";
 
 /**
  * Back-compat alias: level data authors a cell by its preset NAME, which is an
@@ -115,6 +127,14 @@ export const PRESETS: Readonly<Record<EntityKind, Entity>> = Object.freeze({
   // everything except heat sources, the snake, and a small radius round the head;
   // the dark puzzle is purely about remembering geometry you saw lit (§2.2.7).
   heatlamp: Object.freeze<Entity>({ kind: "heatlamp", heat: true }),
+  // Inc 4 / World 6 "The Gullet": a swallowable, body-shaped solid block. As a
+  // free cell it is swallowed by stepping onto it (pickup takes precedence over
+  // solid in tryStep, §2.2.8) and stored as a head `carry`; once DEPOSITED it is
+  // a normal cells entity again — `solid:true` blocks a step, `supports:true`
+  // bears weight / holds a plate down (the shed-skin decoy, §2.2.9 / T-DECOY).
+  // Its solidity is STATIC (not mechanism-derived), so it MAY support — it is not
+  // subject to the M1 single-pass guard.
+  object: Object.freeze<Entity>({ kind: "object", solid: true, supports: true, pickup: true }),
 });
 
 export interface GameState {

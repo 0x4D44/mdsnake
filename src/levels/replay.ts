@@ -6,11 +6,11 @@
 // assert `status === 'won'`. The record-par shell tool serializes exactly this
 // shape; here it is the test-side replay counterpart.
 
-import { anchor, DIRS, move, strike } from "../core/game";
+import { anchor, deposit, DIRS, move, strike } from "../core/game";
 import type { GameState } from "../core/types";
 
 export type DirName = keyof typeof DIRS;
-export type Verb = "move" | "strike" | "anchor";
+export type Verb = "move" | "strike" | "anchor" | "deposit";
 export interface Input {
   verb: Verb;
   /** Ignored for the directionless `anchor` toggle. */
@@ -18,14 +18,22 @@ export interface Input {
 }
 export type Solution = Input[];
 
+/** The shell's logged action — the same shape as a replay `Input`. The undo
+ *  snapshot stack and the input log push/pop this in lockstep; record-par
+ *  serializes it; scoring (`scoreRun`) reads it. `move`/`strike`/`deposit` carry a
+ *  direction; `anchor` is directionless. */
+export type LoggedAction = Input;
+
 /** Replay a recorded input log through the verbs, returning the final state.
- *  `move`/`strike` consume a direction; `anchor` is the directionless toggle
- *  (HLD §2.2.4) and ignores `dir`. */
+ *  `move`/`strike`/`deposit` consume a direction; `anchor` is the directionless
+ *  toggle (HLD §2.2.4) and ignores `dir`. */
 export function replay(start: GameState, solution: Solution): GameState {
   let s = start;
   for (const { verb, dir } of solution) {
     if (verb === "anchor") {
       s = anchor(s);
+    } else if (verb === "deposit") {
+      s = deposit(s, DIRS[dir as DirName]);
     } else {
       s = (verb === "move" ? move : strike)(s, DIRS[dir as DirName]);
     }
@@ -33,8 +41,23 @@ export function replay(start: GameState, solution: Solution): GameState {
   return s;
 }
 
+/** Replay a log step by step, returning the TRACE: the start state plus every
+ *  state after each input. The trace is what scoring reads (HLD §4.5) — exactly
+ *  what the shell's undo stack accumulates. No-op inputs are kept as repeated
+ *  states here; the shell never logs no-ops, so a recorded solution has none. */
+export function trace(start: GameState, solution: Solution): GameState[] {
+  const out: GameState[] = [start];
+  let s = start;
+  for (const input of solution) {
+    s = replay(s, [input]);
+    out.push(s);
+  }
+  return out;
+}
+
 /** Convenience for authored solutions: `m("right")` move, `k("up")` strike,
- *  `a()` anchor (directionless). */
+ *  `a()` anchor (directionless), `d("up")` deposit. */
 export const m = (dir: DirName): Input => ({ verb: "move", dir });
 export const k = (dir: DirName): Input => ({ verb: "strike", dir });
 export const a = (): Input => ({ verb: "anchor" });
+export const d = (dir: DirName): Input => ({ verb: "deposit", dir });

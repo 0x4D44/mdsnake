@@ -5,7 +5,7 @@
 //
 // Inc 1 ships World 1 (Hatchling), R1-R7. Later increments append worlds here.
 
-import type { LevelDef } from "../core/types";
+import type { LevelDef, Vec } from "../core/types";
 import { r1 } from "./world1/r1";
 import { r2 } from "./world1/r2";
 import { r3 } from "./world1/r3";
@@ -34,6 +34,12 @@ import { r3 as w5r3 } from "./world5/r3";
 import { r4 as w5r4 } from "./world5/r4";
 import { r5 as w5r5 } from "./world5/r5";
 import { r6 as w5r6 } from "./world5/r6";
+import { r1 as w6r1 } from "./world6/r1";
+import { r2 as w6r2 } from "./world6/r2";
+import { r3 as w6r3 } from "./world6/r3";
+import { r4 as w6r4 } from "./world6/r4";
+import { r5 as w6r5 } from "./world6/r5";
+import { r6 as w6r6 } from "./world6/r6";
 
 /** An optional per-room scoring constraint (the "constraint egg", §2.7). It is a
  *  pure predicate over the recorded solve, evaluated OUTSIDE the core. Inc 1 only
@@ -43,8 +49,10 @@ export interface Constraint {
   label: string;
   /** Solve in at most this many moves. */
   maxMoves?: number;
-  /** Finish with the snake no longer than this. */
+  /** The snake never grows longer than this during the run. */
   maxLength?: number;
+  /** Solve without ever using a strike. */
+  noStrike?: boolean;
 }
 
 export interface RoomMeta {
@@ -55,8 +63,14 @@ export interface RoomMeta {
   par: number;
   /** Optional constraint egg. */
   constraint?: Constraint;
-  /** Whether the room hides a collectible egg (a marked fruit en route). */
+  /** Whether the room hides a collectible egg (a marked cell en route). */
   hiddenEgg: boolean;
+  /** WHERE the hidden egg sits (HLD §2.7, scoring-only — NOT a core entity). The
+   *  egg is "collected" iff any snake segment occupies this cell during the run
+   *  (scoring reads the trace; the core never knows — see scoring.ts). Present iff
+   *  `hiddenEgg` is true. Authors place a visible lure (a fruit) here on the board;
+   *  collection is purely positional, independent of eating it. */
+  eggAt?: Vec;
   /** Whether the room is rendered DARK (Inc 3 / World 5 "Dark", §2.2.7). This is a
    *  PRESENTATION flag ONLY — the renderer dims everything except heat sources, the
    *  snake, and a small radius round the head. The sim core never reads it; rules
@@ -76,10 +90,10 @@ export const WORLDS: World[] = [
     name: "Hatchling",
     rooms: [
       { id: "w1r1", level: r1, par: 7, hiddenEgg: false },
-      { id: "w1r2", level: r2, par: 5, hiddenEgg: true },
+      { id: "w1r2", level: r2, par: 5, hiddenEgg: true, eggAt: { x: 5, y: 1 } },
       { id: "w1r3", level: r3, par: 1, hiddenEgg: false, constraint: { label: "min length", maxLength: 4 } },
-      { id: "w1r4", level: r4, par: 2, hiddenEgg: true },
-      { id: "w1r5", level: r5, par: 2, hiddenEgg: true },
+      { id: "w1r4", level: r4, par: 2, hiddenEgg: true, eggAt: { x: 4, y: 1 } },
+      { id: "w1r5", level: r5, par: 2, hiddenEgg: true, eggAt: { x: 3, y: 1 } },
       { id: "w1r6", level: r6, par: 4, hiddenEgg: false, constraint: { label: "one strike", maxMoves: 4 } },
       { id: "w1r7", level: r7, par: 5, hiddenEgg: false },
     ],
@@ -96,7 +110,7 @@ export const WORLDS: World[] = [
       { id: "w2r3", level: w2r3, par: 2, hiddenEgg: false },
       // The twist: a fruit behind the snake tempts an over-grow. The constraint
       // egg rewards solving without eating (the snake stays length 2).
-      { id: "w2r4", level: w2r4, par: 2, hiddenEgg: true, constraint: { label: "don't over-grow", maxLength: 2 } },
+      { id: "w2r4", level: w2r4, par: 2, hiddenEgg: true, eggAt: { x: 0, y: 1 }, constraint: { label: "don't over-grow", maxLength: 2 } },
       { id: "w2r5", level: w2r5, par: 2, hiddenEgg: false },
     ],
   },
@@ -147,6 +161,24 @@ export const WORLDS: World[] = [
       { id: "w5r4", level: w5r4, par: 2, hiddenEgg: false, dark: true },
       { id: "w5r5", level: w5r5, par: 3, hiddenEgg: false, dark: true },
       { id: "w5r6", level: w5r6, par: 3, hiddenEgg: false, dark: true },
+    ],
+  },
+  {
+    // World 6 "The Gullet" — swallow & carry + deposit (§2.2.8), with the shed-skin
+    // decoy used as STRUCTURE as the twist (§2.2.9). R1 teaches swallow+deposit-to-
+    // bridge; R2 sheds a stair; R3 is the decoy-bridge twist; R4 carries through a
+    // strike; R5 is the two-pit long carry; R6 is the capstone with a hidden egg.
+    // The block is load-bearing in every room (rooms.test asserts unsolvable without
+    // it). Pars are the BFS-shortest solution lengths (== solutions.ts entries).
+    id: "w6",
+    name: "The Gullet",
+    rooms: [
+      { id: "w6r1", level: w6r1, par: 6, hiddenEgg: false },
+      { id: "w6r2", level: w6r2, par: 7, hiddenEgg: false },
+      { id: "w6r3", level: w6r3, par: 7, hiddenEgg: false },
+      { id: "w6r4", level: w6r4, par: 6, hiddenEgg: false },
+      { id: "w6r5", level: w6r5, par: 8, hiddenEgg: false },
+      { id: "w6r6", level: w6r6, par: 8, hiddenEgg: true, eggAt: { x: 5, y: 2 } },
     ],
   },
 ];

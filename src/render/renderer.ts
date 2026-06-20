@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
-import type { EntityKind, GameState, LevelDef } from "../core/types";
+import type { EntityKind, GameState, LevelDef, Vec } from "../core/types";
 
 const COLORS = {
   bg: 0x10141c,
@@ -9,6 +9,11 @@ const COLORS = {
   /** An anchored segment (gripping a wall) gets a hot accent so the player can
    *  see which part of the body is holding on (Inc 2). */
   anchored: 0xff8800,
+  /** A carried (swallowed) block, drawn as a small nib on the carrying segment so
+   *  the player can see the gut is full (Inc 4 / World 6, §2.2.8). */
+  carry: 0xc8a064,
+  /** The hidden-egg marker (scoring-only, §2.7) — a pale gold orb on its cell. */
+  egg: 0xffe08a,
 };
 
 /** Per-kind visual choice. The renderer reads the entity's `kind` (rules read
@@ -31,6 +36,11 @@ const KIND_STYLE: Record<EntityKind, { color: number; shape: "box" | "sphere"; s
   // one of the few things that stays lit (it is a HEAT source), so the player uses
   // lamps as landmarks for the geometry they memorised while lit.
   heatlamp: { color: 0xffaa33, shape: "sphere", scale: 0.55 },
+  // A swallowable / shed block (Inc 4 / World 6 "The Gullet"): a chunky tan crate
+  // that reads as a discrete object you can swallow and re-deposit as a step or a
+  // plate/gate holder (the decoy, §2.2.8/§2.2.9). Slightly under-scale so a
+  // deposited block sits visibly within its cell.
+  object: { color: 0xc8a064, shape: "box", scale: 0.85 },
 };
 const FALLBACK_STYLE = KIND_STYLE.wall;
 
@@ -61,6 +71,10 @@ export class Renderer {
   /** Whether the CURRENT room is dark (heat-sense mode, §2.2.7). Set per room in
    *  `onRoomLoad`; the core never knows about this — it is pure presentation. */
   private dark = false;
+  /** The hidden-egg cell for the current room, if any (scoring-only marker, §2.7).
+   *  Set per room in `onRoomLoad`; drawn as a pale orb. The core has no egg entity —
+   *  this is purely a visual hint of where the bonus marker sits. */
+  private eggAt: Vec | undefined;
 
   constructor(private container: HTMLElement) {
     this.scene.background = new THREE.Color(COLORS.bg);
@@ -107,11 +121,12 @@ export class Renderer {
    * frame. Re-centres `controls.target` and pulls the camera back to fit the
    * room's extent (HLD §2.8 camera auto-fit).
    */
-  onRoomLoad(_state: GameState, level: LevelDef, dark = false) {
+  onRoomLoad(_state: GameState, level: LevelDef, dark = false, eggAt?: Vec) {
     // Dark mode (§2.2.7) is RENDERER-ONLY: dim the scene's global lights so only
     // heat sources, the snake, and the head's small lit radius stand out (the
     // per-cell dimming happens in `render`). The core is unchanged.
     this.dark = dark;
+    this.eggAt = eggAt;
     this.ambient.intensity = dark ? 0.12 : 0.6;
     this.sun.intensity = dark ? 0.15 : 0.85;
 
@@ -124,6 +139,7 @@ export class Renderer {
     };
     for (const c of level.cells) include(c.x, c.y);
     for (const s of level.snake) include(s.x, s.y);
+    if (eggAt) include(eggAt.x, eggAt.y);
     if (!Number.isFinite(minX)) {
       minX = 0; maxX = 0; minY = 0; maxY = 0; // empty room guard
     }
@@ -215,11 +231,24 @@ export class Renderer {
       }
     }
 
+    // The hidden-egg marker (scoring-only, §2.7): a pale orb floating on its cell.
+    // Drawn UNDER the snake so a segment occupying it (collecting it) reads on top.
+    // In the dark it dims with everything else unless within the head's radius.
+    if (this.eggAt) {
+      const dim = this.dark && !litInDark(this.eggAt.x, this.eggAt.y, {}) ? DARK_DIM_OPACITY : undefined;
+      this.add(this.eggAt.x, this.eggAt.y, COLORS.egg, "sphere", 0.45, { opacity: dim });
+    }
+
     state.snake.forEach((seg, i) => {
       // An anchored segment gets the hot accent (it is the one gripping the
       // wall); otherwise head vs body colouring as before.
       const color = seg.anchored ? COLORS.anchored : i === 0 ? COLORS.head : COLORS.body;
       this.add(seg.x, seg.y, color, "box", 0.85);
+      // A carried (swallowed) block rides on its segment — draw a small nib on top
+      // so a full gut is visible (Inc 4 / World 6, §2.2.8).
+      if (seg.carry !== undefined) {
+        this.add(seg.x, seg.y + 0.55, COLORS.carry, "box", 0.35);
+      }
     });
   }
 }
