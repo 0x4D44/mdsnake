@@ -1,37 +1,107 @@
 import { buildState, DIRS, move, strike } from "./core/game";
 import type { GameState } from "./core/types";
-import { level1 } from "./levels/level1";
+import { ALL_ROOMS, WORLDS } from "./levels/worlds";
+import type { Input } from "./levels/replay";
 import { Renderer } from "./render/renderer";
 
 const app = document.getElementById("app")!;
 const hud = document.getElementById("hud")!;
 const renderer = new Renderer(app);
 
+// --- Per-room session state ------------------------------------------------
+//
+// Two parallel stacks (HLD §2.6/§2.7, D26):
+//   `history`  — the undo SNAPSHOT stack (the states).
+//   `inputs`   — the INPUT LOG: the `{verb, dir}` move sequence (the moves).
+// Every EFFECTIVE act() pushes onto BOTH; undo pops BOTH in lockstep. They are
+// UNBOUNDED within a room and RESET on restart / room navigation (closes
+// open-Q#7). The input log is what record-par serializes — never the snapshots
+// (F3): it replays through `core/game`'s verbs to feed T-PAR / T-ROOM-SOLVE.
+
+let roomIndex = 0;
 let history: GameState[] = [];
-let state = buildState(level1);
+let inputs: Input[] = [];
+let state: GameState;
+
+function room() {
+  return ALL_ROOMS[roomIndex];
+}
+
+/** Which world a room index belongs to (for the HUD label). */
+function worldOf(index: number) {
+  let seen = 0;
+  for (const w of WORLDS) {
+    if (index < seen + w.rooms.length) return { world: w, roomNo: index - seen + 1 };
+    seen += w.rooms.length;
+  }
+  return { world: WORLDS[WORLDS.length - 1], roomNo: 1 };
+}
+
+/** Load a room fresh: reset both stacks (undo + input log) for the new room. */
+function loadRoom(index: number) {
+  roomIndex = index;
+  history = [];
+  inputs = [];
+  state = buildState(room().level);
+  renderer.onRoomLoad(state, room().level);
+  render();
+}
 
 function statusLine(): string {
-  if (state.status === "won") return "<b>Solved!</b> &nbsp;(R to replay)";
-  if (state.status === "dead") return "<b>You fell.</b> &nbsp;(R to restart, U to undo)";
-  return `Reach the green exit &nbsp;<span class="sub">len ${state.snake.length}</span>`;
+  if (state.status === "won") {
+    const last = roomIndex === ALL_ROOMS.length - 1;
+    return last
+      ? "<b>Solved — that's the last room!</b> &nbsp;(R to replay)"
+      : "<b>Solved!</b> &nbsp;(N / Space: next room &nbsp;·&nbsp; R: replay)";
+  }
+  if (state.status === "dead") return "<b>You fell.</b> &nbsp;(U: undo &nbsp;·&nbsp; R: restart)";
+  return "Reach the green exit.";
 }
 
 function render() {
   renderer.render(state);
+  const { world, roomNo } = worldOf(roomIndex);
   hud.innerHTML =
-    `<b>COIL</b> &nbsp;·&nbsp; ${state.name}<br>${statusLine()}<br><br>` +
+    `<b>COIL</b> &nbsp;·&nbsp; ${world.name} &nbsp;—&nbsp; Room ${roomNo} &nbsp;` +
+    `<span class="sub">(${room().id})</span><br>` +
+    `${statusLine()}<br><br>` +
     `<span class="sub">Arrows: move &nbsp;·&nbsp; Shift+Arrow: strike<br>` +
-    `U: undo &nbsp;·&nbsp; R: restart &nbsp;·&nbsp; drag: orbit</span>`;
+    `U: undo &nbsp;·&nbsp; R: restart &nbsp;·&nbsp; N: next &nbsp;·&nbsp; drag: orbit<br>` +
+    `len ${state.snake.length} &nbsp;·&nbsp; moves ${inputs.length}</span>`;
 }
 
-function act(next: GameState) {
-  if (next === state) return; // blocked / no-op
+/** Apply a verb result. No-op (blocked / terminal) returns the same ref. */
+function act(verb: Input["verb"], dirName: Input["dir"]) {
+  const next = (verb === "strike" ? strike : move)(state, DIRS[dirName]);
+  if (next === state) return; // blocked / no-op — do not log
   history.push(state);
+  inputs.push({ verb, dir: dirName });
   state = next;
   render();
 }
 
-const KEYS: Record<string, keyof typeof DIRS> = {
+function undo() {
+  const prev = history.pop();
+  if (!prev) return;
+  inputs.pop(); // lockstep with the snapshot stack
+  state = prev;
+  render();
+}
+
+function nextRoom() {
+  if (state.status !== "won") return;
+  if (roomIndex < ALL_ROOMS.length - 1) loadRoom(roomIndex + 1);
+}
+
+/** Serialize the current input log as the room's par solution (authoring tool). */
+function recordPar() {
+  const json = JSON.stringify(inputs);
+  // Console is the authoring sink; clipboard is a best-effort convenience.
+  console.log(`[record-par] ${room().id} (${inputs.length} moves):\n${json}`);
+  navigator.clipboard?.writeText(json).catch(() => {});
+}
+
+const KEYS: Record<string, Input["dir"]> = {
   ArrowUp: "up",
   ArrowDown: "down",
   ArrowLeft: "left",
@@ -42,21 +112,24 @@ window.addEventListener("keydown", (e) => {
   const dirName = KEYS[e.key];
   if (dirName) {
     e.preventDefault();
-    const dir = DIRS[dirName];
-    act(e.shiftKey ? strike(state, dir) : move(state, dir));
+    act(e.shiftKey ? "strike" : "move", dirName);
     return;
   }
-  if (e.key === "u" || e.key === "U") {
-    const prev = history.pop();
-    if (prev) {
-      state = prev;
-      render();
-    }
-  } else if (e.key === "r" || e.key === "R") {
-    history = [];
-    state = buildState(level1);
-    render();
+  switch (e.key.toLowerCase()) {
+    case "u":
+      undo();
+      break;
+    case "r":
+      loadRoom(roomIndex);
+      break;
+    case "n":
+    case " ":
+      nextRoom();
+      break;
+    case "p":
+      recordPar();
+      break;
   }
 });
 
-render();
+loadRoom(0);

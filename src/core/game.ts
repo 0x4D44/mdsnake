@@ -18,7 +18,8 @@
 // mutating the input. That makes undo a trivial snapshot stack and the rules
 // straightforward to test.
 
-import type { CellType, Dir, GameState, LevelDef, Vec } from "./types";
+import type { Dir, Entity, GameState, LevelDef, Vec } from "./types";
+import { PRESETS } from "./types";
 
 export const key = (v: Vec): string => `${v.x},${v.y}`;
 
@@ -31,17 +32,18 @@ export const DIRS: Record<"up" | "down" | "left" | "right", Dir> = {
 
 const eq = (a: Vec, b: Vec): boolean => a.x === b.x && a.y === b.y;
 
-export function cellAt(s: GameState, v: Vec): CellType | undefined {
+export function cellAt(s: GameState, v: Vec): Entity | undefined {
   return s.cells.get(key(v));
 }
 
-/** Only walls bear weight. Segments never support each other (rigid fall). */
+/** A cell bears weight iff its entity has `supports`. Segments never support
+ *  each other (rigid fall). */
 function isSupported(s: GameState): boolean {
-  return s.snake.some((seg) => cellAt(s, { x: seg.x, y: seg.y - 1 }) === "wall");
+  return s.snake.some((seg) => cellAt(s, { x: seg.x, y: seg.y - 1 })?.supports === true);
 }
 
 function checkWin(s: GameState): GameState {
-  if (s.status === "play" && cellAt(s, s.snake[0]) === "exit") {
+  if (s.status === "play" && cellAt(s, s.snake[0])?.win === true) {
     return { ...s, status: "won" };
   }
   return s;
@@ -49,16 +51,16 @@ function checkWin(s: GameState): GameState {
 
 /**
  * One grid step of the head in `dir`, with NO gravity. Returns the new state,
- * or null if the step is blocked (wall, or the snake's own body — excluding the
- * tail cell, which vacates unless the step eats fruit).
+ * or null if the step is blocked (a `solid` cell, or the snake's own body —
+ * excluding the tail cell, which vacates unless the step eats).
  */
 function tryStep(s: GameState, dir: Dir): GameState | null {
   const head = s.snake[0];
   const target: Vec = { x: head.x + dir.x, y: head.y + dir.y };
   const t = cellAt(s, target);
-  if (t === "wall") return null;
+  if (t?.solid === true) return null;
 
-  const eating = t === "fruit";
+  const eating = t?.eat === true;
   // When not eating, the tail vacates this turn, so its current cell is free.
   const body = eating ? s.snake : s.snake.slice(0, -1);
   if (body.some((seg) => eq(seg, target))) return null;
@@ -77,7 +79,18 @@ function tryStep(s: GameState, dir: Dir): GameState | null {
 /** Apply gravity until the snake is supported, wins, or falls into the void. */
 export function settle(s: GameState): GameState {
   let cur = s;
+  // Hard iteration cap (P-SETTLE-TERMINATION): the snake drops 1 per step and
+  // dies once every segment is below floorY, so it can never take more than
+  // (highest segment above floorY) + 2 steps. The +2 absorbs the boundary and
+  // the win/death check ordering. This bound is a defence-in-depth guard against
+  // a future non-terminating settle; it must NEVER fire in correct operation.
+  const maxY = cur.snake.reduce((m, p) => Math.max(m, p.y), cur.floorY);
+  const cap = maxY - cur.floorY + 2;
+  let iters = 0;
   while (cur.status === "play" && !isSupported(cur)) {
+    if (iters++ > cap) {
+      throw new Error(`settle exceeded iteration cap ${cap} (non-terminating gravity)`);
+    }
     const snake = cur.snake.map((p) => ({ x: p.x, y: p.y - 1 }));
     cur = { ...cur, snake };
     if (cur.snake.every((p) => p.y < cur.floorY)) {
@@ -111,10 +124,12 @@ export function strike(s: GameState, dir: Dir): GameState {
   return settle(cur);
 }
 
-/** Build a live, already-settled GameState from a static level definition. */
+/** Build a live, already-settled GameState from a static level definition.
+ *  Each cell references a preset BY NAME; we map it to the frozen PRESETS entity
+ *  here — raw flag literals never appear in level data (F6). */
 export function buildState(level: LevelDef): GameState {
-  const cells = new Map<string, CellType>();
-  for (const c of level.cells) cells.set(key(c), c.type);
+  const cells = new Map<string, Entity>();
+  for (const c of level.cells) cells.set(key(c), PRESETS[c.type]);
   return settle({
     snake: level.snake.map((p) => ({ ...p })),
     cells,
