@@ -1,6 +1,6 @@
-import { anchor, buildState, deposit, DIRS, move, strike } from "./core/game";
+import { anchor, deposit, DIRS, move, strike, switchBody } from "./core/game";
 import type { GameState } from "./core/types";
-import { ALL_ROOMS, WORLDS } from "./levels/worlds";
+import { ALL_ROOMS, buildRoom, WORLDS } from "./levels/worlds";
 import type { DirName, LoggedAction } from "./levels/replay";
 import { scoreRun } from "./scoring";
 import type { Eggs } from "./scoring";
@@ -66,7 +66,10 @@ function loadRoom(index: number) {
   roomIndex = index;
   history = [];
   inputs = [];
-  state = buildState(room().level);
+  // A co-op room (World 7) builds a multi-body state via `buildRoom`; an ordinary
+  // room falls back to `buildState(level)`. The renderer is still framed off the
+  // single-snake `level` projection (camera bounds only).
+  state = buildRoom(room());
   // World 5 "Dark" rooms render in heat-sense mode (renderer-only; the core is
   // unchanged — §2.2.7). `dark` is a presentation flag on the room metadata.
   renderer.onRoomLoad(state, room().level, room().dark === true, room().eggAt);
@@ -94,6 +97,8 @@ function worldHint(worldId: string): string {
       return "Stand on an amber plate to open its matching gate; a body in the gate holds it open.";
     case "w6":
       return "Step onto a crate to swallow it; press D then an arrow to deposit it as a bridge or step.";
+    case "w7":
+      return "Two bodies — press Tab to switch which one you control; get BOTH heads onto exits.";
     default:
       return "";
   }
@@ -177,6 +182,13 @@ function anchorAct() {
   commit(anchor(state), { verb: "anchor" });
 }
 
+/** Tab (Inc 4b): cycle which co-op body is active. Logged in the input-log/undo
+ *  stacks (via commit) so record-par round-trips it; a no-op on single-snake
+ *  rooms (no other body) so it is never logged there. */
+function switchAct() {
+  commit(switchBody(state), { verb: "switch" });
+}
+
 /** Deposit the carried block into the cell in `dirName` (Inc 4, §2.2.8). */
 function depositAct(dirName: DirName) {
   act("deposit", dirName);
@@ -232,6 +244,10 @@ window.addEventListener("keydown", (e) => {
       break;
     case "a":
       anchorAct();
+      break;
+    case "tab":
+      e.preventDefault(); // do not let Tab move browser focus off the canvas
+      switchAct(); // Inc 4b: cycle the active co-op body
       break;
     case "u":
       undo();

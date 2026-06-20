@@ -8,7 +8,7 @@ import { buildState } from "./core/game";
 import { replay, trace } from "./levels/replay";
 import type { LoggedAction } from "./levels/replay";
 import { SOLUTIONS } from "./levels/solutions";
-import { ALL_ROOMS, WORLDS } from "./levels/worlds";
+import { ALL_ROOMS, buildRoom, WORLDS } from "./levels/worlds";
 import type { RoomMeta } from "./levels/worlds";
 import {
   constraintMet,
@@ -36,12 +36,14 @@ describe("T-PAR — every room's recorded solve reaches won in exactly par", () 
       expect(sol).toBeDefined();
       // par == recorded length (achievable, author-asserted optimum).
       expect(sol.length).toBe(room.par);
-      // Replaying the FULL solution reaches won...
-      const final = replay(buildState(room.level), sol);
+      // Replaying the FULL solution reaches won. `buildRoom` builds the playable
+      // state for ANY room — including a co-op (World 7) room's multi-body state,
+      // which a bare `buildState(room.level)` (a single-snake projection) cannot.
+      const final = replay(buildRoom(room), sol);
       expect(final.status).toBe("won");
       // ...and not before the final move (the win lands ON the par-th move).
       if (sol.length > 1) {
-        const beforeLast = replay(buildState(room.level), sol.slice(0, -1));
+        const beforeLast = replay(buildRoom(room), sol.slice(0, -1));
         expect(beforeLast.status).not.toBe("won");
       }
     });
@@ -163,7 +165,7 @@ describe("authored constraint eggs are achievable by the recorded solve", () => 
   });
   for (const room of constrained) {
     it(`${room.id} satisfies "${room.constraint!.label}" on its recorded solve`, () => {
-      const t = trace(buildState(room.level), SOLUTIONS[room.id]);
+      const t = trace(buildRoom(room), SOLUTIONS[room.id]);
       expect(solved(t)).toBe(true);
       expect(constraintMet(t, SOLUTIONS[room.id], room.constraint)).toBe(true);
     });

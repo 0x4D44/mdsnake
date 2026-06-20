@@ -9,7 +9,7 @@
 // a later red is unambiguously the refactor's fault.
 
 import { describe, expect, it } from "vitest";
-import { anchor, buildState, deposit, DIRS, key, move, settle, strike } from "./game";
+import { anchor, buildState, deposit, DIRS, key, move, settle, strike, switchBody } from "./game";
 import { PRESETS } from "./types";
 import type { CellType, Dir, Entity, EntityKind, GameState, LevelDef } from "./types";
 
@@ -30,12 +30,15 @@ function lvl(p: Partial<LevelDef> & Pick<LevelDef, "snake">): LevelDef {
   return { name: "p", strikeRange: 3, floorY: 0, cells: [], ...p };
 }
 
-/** A structural deep clone that preserves the Map in `cells`. */
+/** A structural deep clone that preserves the Map in `cells` and the co-op
+ *  `bodies` (Inc 4b). The M2 invariant is preserved: an absent `bodies` stays
+ *  absent (never coerced to `[]`). */
 function clone(s: GameState): GameState {
   return {
     ...s,
     snake: s.snake.map((p) => ({ ...p })),
     cells: new Map(s.cells),
+    ...(s.bodies === undefined ? {} : { bodies: s.bodies.map((b) => b.map((p) => ({ ...p }))) }),
   };
 }
 
@@ -59,6 +62,22 @@ function deepEqual(a: GameState, b: GameState): boolean {
   if (a.cells.size !== b.cells.size) return false;
   for (const [k, v] of a.cells) {
     if (b.cells.get(k) !== v) return false;
+  }
+  // Inc 4b: the co-op `bodies` (the OTHER snakes). M2: an absent `bodies` must
+  // compare distinct from a present one — absent and `[]` are NOT equal.
+  if ((a.bodies === undefined) !== (b.bodies === undefined)) return false;
+  if (a.bodies !== undefined && b.bodies !== undefined) {
+    if (a.bodies.length !== b.bodies.length) return false;
+    for (let i = 0; i < a.bodies.length; i++) {
+      if (a.bodies[i].length !== b.bodies[i].length) return false;
+      for (let j = 0; j < a.bodies[i].length; j++) {
+        const p = a.bodies[i][j];
+        const q = b.bodies[i][j];
+        if (p.x !== q.x || p.y !== q.y) return false;
+        if (Boolean(p.anchored) !== Boolean(q.anchored)) return false;
+        if (p.carry !== q.carry) return false;
+      }
+    }
   }
   return true;
 }
@@ -325,6 +344,56 @@ describe("P-UNDO", () => {
       verb.fn(s, d.dir);
       // Undo = discard the result, restore the snapshot.
       expect(deepEqual(snapshot, s), `${verb.name}/${d.name} @${idx}`).toBe(true);
+    });
+  });
+
+  // Inc 4b: P-UNDO extended to the ACTIVE-BODY SWITCH (Tab). Tab is logged in the
+  // shell's input-log/undo stack, so it must round-trip too: switching the active
+  // body and switching back restores the original state, and the snapshot taken
+  // before a switch is never mutated by it. A multi-body corpus exercises the
+  // genuine switch (single-snake states no-op, which P-NOOP-IDENTITY already
+  // covers).
+  describe("active-body switch (Tab)", () => {
+    const coopStates: GameState[] = [
+      // Two bodies on a flat floor (the canonical co-op rest state).
+      {
+        snake: [{ x: 1, y: 1 }, { x: 0, y: 1 }],
+        bodies: [[{ x: 5, y: 1 }, { x: 4, y: 1 }]],
+        cells: buildState(lvl({ snake: [{ x: 9, y: 9 }], cells: floorRow(0, 0, 8) })).cells,
+        strikeRange: 3,
+        floorY: 0,
+        status: "play",
+        name: "coop-undo",
+      },
+      // Three bodies (full rotation exercise).
+      {
+        snake: [{ x: 1, y: 1 }],
+        bodies: [[{ x: 3, y: 1 }], [{ x: 5, y: 1 }]],
+        cells: buildState(lvl({ snake: [{ x: 9, y: 9 }], cells: floorRow(0, 0, 8) })).cells,
+        strikeRange: 3,
+        floorY: 0,
+        status: "play",
+        name: "coop-undo-3",
+      },
+    ];
+
+    it("does not mutate the snapshot taken before a switch", () => {
+      coopStates.forEach((s, idx) => {
+        const snapshot = clone(s);
+        switchBody(s);
+        expect(deepEqual(snapshot, s), `@${idx}`).toBe(true);
+      });
+    });
+
+    it("a full cycle of switches returns to the original (round-trip)", () => {
+      coopStates.forEach((s, idx) => {
+        const n = (s.bodies?.length ?? 0) + 1; // number of bodies in the cycle
+        let cur = s;
+        for (let i = 0; i < n; i++) cur = switchBody(cur);
+        // After a FULL cycle the active pointer is back on the original body and
+        // the state deep-equals the original.
+        expect(deepEqual(cur, s), `@${idx} after ${n} switches`).toBe(true);
+      });
     });
   });
 });

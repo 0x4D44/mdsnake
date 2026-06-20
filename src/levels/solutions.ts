@@ -14,7 +14,7 @@
 // per-world unsolvable-without-mechanic guards; this map is the authoritative cross-
 // room T-PAR source and the World-6 solve source.)
 
-import { a, d, k, m } from "./replay";
+import { a, d, k, m, sw } from "./replay";
 import type { Solution } from "./replay";
 
 export const SOLUTIONS: Record<string, Solution> = {
@@ -76,4 +76,25 @@ export const SOLUTIONS: Record<string, Solution> = {
   // R6 Gullet Capstone: swallow, deposit-bridge the gap, cross to the exit (the
   // hidden egg on the shelf is an optional detour, not on this beeline).
   w6r6: [m("right"), m("right"), m("right"), d("down"), m("right"), m("right"), m("right"), m("right")],
+
+  // --- World 7 (Two Bodies) — co-op; `sw()` is the Tab body-switch (§2.2.10) ---
+  // Recorded from the multi-body BFS over move+strike+switch (BFS-shortest == par).
+  // R1 Two Heads: A strikes onto its exit; Tab to B; B steps onto its exit (all
+  // heads on exits -> won).
+  w7r1: [k("right"), sw(), m("right")],
+  // R2 Hold the Door: B to the gate lip; Tab A; A onto the plate (B's gate opens);
+  // Tab B; B threads the gate to its exit; Tab A; A walks on to its exit.
+  w7r2: [m("right"), sw(), m("right"), m("right"), sw(), m("right"), m("right"), m("right"), sw(), m("right"), m("right")],
+  // R3 Take Turns: A opens B's gate; B (through) opens A's gate; both finish.
+  w7r3: [m("right"), sw(), m("right"), m("right"), sw(), m("right"), m("right"), m("right"), sw(), m("right"), m("right"), m("right"), sw(), m("right")],
+  // R4 The Long Hall: the three-stage A->B->A relay chain, then both to their exits.
+  w7r4: [m("right"), sw(), m("right"), m("right"), sw(), m("right"), m("right"), m("right"), sw(), m("right"), m("right"), m("right"), m("right"), sw(), m("right"), m("right"), m("right"), sw(), m("right")],
+
+  // --- World 8 (Recombination) — single-body finale; only shipped abilities ---
+  // R1 Crossing: swallow + strike to the lip, deposit DOWN, strike across the chasm.
+  w8r1: [m("right"), k("right"), d("down"), m("right"), k("right"), k("right")],
+  // R2 The Wide Crossing: carry + deposit + strike to thread the wider chasm.
+  w8r2: [k("right"), d("right"), m("left"), m("up"), k("right"), m("right"), k("right"), k("right")],
+  // R3 The Spire: anchor-climb the grip wall, strike across the void, step to exit.
+  w8r3: [m("left"), m("up"), a(), m("up"), a(), m("up"), a(), m("up"), k("right"), m("right")],
 };

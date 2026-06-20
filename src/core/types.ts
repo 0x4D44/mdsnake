@@ -152,6 +152,15 @@ export interface GameState {
    *  `applyMechanisms` (no cross-turn latch, §2.2.6). ABSENT until the first
    *  mechanism pass writes it; a level with no plates/gates never carries it. */
   triggers?: Set<string>;
+  /** The OTHER snakes in a co-op room (Inc 4b / World 7, §2.2.10). `snake` is the
+   *  ACTIVE body the player currently controls; `bodies` holds the rest. The
+   *  kernel iterates `allBodies = [snake, ...(bodies ?? [])]`.
+   *
+   *  M2 bodies-absent INVARIANT (load-bearing for T-COOP-MIGRATE): a single-snake
+   *  state keeps `bodies` ABSENT (`undefined`), NEVER `[]`. The kernel never writes
+   *  `bodies` back on a single-snake state, so a co-op kernel replaying a
+   *  single-snake trace yields snapshots byte-identical to the Inc-0 originals. */
+  bodies?: Segment[][];
 }
 
 export interface LevelDef {

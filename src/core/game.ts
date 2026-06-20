@@ -57,33 +57,103 @@ export function gripBeside(s: GameState, seg: Vec): boolean {
 }
 
 /**
- * Is some segment a grounding source this turn?
+ * Does THIS body rest on a WORLD grounding source this turn (the closure's base
+ * case — grounding that does not depend on another body)?
  *
- *   groundingSource(seg) := (world cell BELOW seg has `supports`)
- *                           OR (seg.anchored AND a grip surface is within reach)
+ *   worldGrounded(body) := SOME segment has (world cell BELOW it `supports`)
+ *                          OR (seg.anchored AND a grip surface is within reach)
  *
  * The first clause is the original world-support rule (a cell you stand on). The
  * second (Inc 2 / §2.5 / D25) is anchored-on-grip: an anchored segment grounds
- * the snake — but ONLY while it is currently gripping a grip surface. The stored
+ * the body — but ONLY while it is currently gripping a grip surface. The stored
  * `anchored` flag is INTENT; the grip surface is the TRUTH, derived each turn
- * with no latch — a segment carried off the grip wall stops grounding the snake
+ * with no latch — a segment carried off the grip wall stops grounding it
  * (T-ANCHOR-CARRY).
- *
- * Segments never support each other (rigid fall); multi-body chains land Inc 4.
  */
-function isSupported(s: GameState): boolean {
-  return s.snake.some(
+function worldGrounded(s: GameState, body: Segment[]): boolean {
+  return body.some(
     (seg) =>
       cellAt(s, { x: seg.x, y: seg.y - 1 })?.supports === true ||
       (seg.anchored === true && gripBeside(s, seg)),
   );
 }
 
+/** All bodies in resolution order: the ACTIVE `snake` first, then the OTHERS.
+ *  Single-snake states keep `bodies` ABSENT (M2), so this is exactly `[snake]`. */
+export function allBodies(s: GameState): Segment[][] {
+  return s.bodies === undefined ? [s.snake] : [s.snake, ...s.bodies];
+}
+
+/**
+ * The §2.5 GENERAL transitive-grounding closure over `bodies`.
+ *
+ * A body is GROUNDED iff it transitively rests — through a chain of bodies it
+ * sits on — on a world grounding source (a `supports` cell or an anchored-on-grip
+ * segment). Computed as a fixpoint closure from the world-grounded bodies:
+ *
+ *   1. seed: every body that is `worldGrounded`.
+ *   2. expand: a not-yet-grounded body becomes grounded if SOME of its segments
+ *      sits DIRECTLY ON (cell directly below) a segment of an ALREADY-grounded
+ *      body — never on itself (a body may rest on ANOTHER body but never
+ *      self-bridges; D-§2.5). Repeat to a fixpoint.
+ *
+ * The closure is ORDER-INDEPENDENT by construction: a body's membership depends
+ * only on the set of grounded bodies, not on iteration order (F3/F17 — mutual
+ * ungrounded pairs are never in the seed and never reach a real source, so they
+ * stay ungrounded and BOTH fall, T-SETTLE-MUTUAL).
+ *
+ * Single-body degenerate case: the closure is exactly `worldGrounded(snake)`
+ * (the old `isSupported`) — no other body to rest on.
+ */
+function groundedSet(s: GameState, bodies: Segment[][]): boolean[] {
+  const grounded = bodies.map((b) => worldGrounded(s, b));
+  // Precompute each grounded body's occupancy; expand the closure to a fixpoint.
+  let changed = true;
+  while (changed) {
+    changed = false;
+    // Cells currently occupied by grounded bodies (rebuilt as the set grows).
+    const groundedCells = new Set<string>();
+    for (let i = 0; i < bodies.length; i++) {
+      if (grounded[i]) for (const seg of bodies[i]) groundedCells.add(key(seg));
+    }
+    for (let i = 0; i < bodies.length; i++) {
+      if (grounded[i]) continue;
+      // Body i is grounded if some segment sits directly atop a grounded body's
+      // segment — i.e. the cell directly below it is occupied by a grounded body
+      // (and that occupant is NOT body i itself, which `groundedCells` excludes
+      // since body i is not grounded). Self-bridging is impossible.
+      const onGrounded = bodies[i].some((seg) => groundedCells.has(key({ x: seg.x, y: seg.y - 1 })));
+      if (onGrounded) {
+        grounded[i] = true;
+        changed = true;
+      }
+    }
+  }
+  return grounded;
+}
+
+/**
+ * The SINGLE-BODY instant-win check: a play state whose ACTIVE head is on a `win`
+ * cell becomes `won`. Run after a verb's grid steps, on each strike flight step,
+ * and on each single-body fall step.
+ *
+ * Inc 4b: it is a NO-OP while `bodies` is present (the per-step single-head
+ * early-win does NOT fire in co-op; `checkEnd`/`allHeadsWin` is the sole multi-body
+ * win authority, D28). M2: absent `bodies` keeps the original behaviour exactly.
+ */
 function checkWin(s: GameState): GameState {
+  if (s.bodies !== undefined) return s;
   if (s.status === "play" && cellAt(s, s.snake[0])?.win === true) {
     return { ...s, status: "won" };
   }
   return s;
+}
+
+/** Multi-body WIN authority (Inc 4b, §2.2.10 / D28): WIN = ALL heads on their
+ *  exits. The per-step early-win does NOT fire while `bodies` is present, so this
+ *  is the SOLE win check for co-op. */
+function allHeadsWin(s: GameState): boolean {
+  return allBodies(s).every((b) => cellAt(s, b[0])?.win === true);
 }
 
 /**
@@ -114,9 +184,14 @@ function tryStep(s: GameState, dir: Dir): GameState | null {
   if (t?.solid === true && !swallowing) return null;
 
   const eating = !swallowing && t?.eat === true;
-  // When neither eating nor swallowing, the tail vacates, so its cell is free.
+  // When neither eating nor swallowing, the active body's tail vacates, so its
+  // cell is free.
   const body = eating ? s.snake : s.snake.slice(0, -1);
   if (body.some((seg) => eq(seg, target))) return null;
+  // Inc 4b: the OTHER co-op bodies are external SOLID obstacles — they do not
+  // vacate, so the active head is blocked by ANY of their segments (M2: absent
+  // `bodies` makes this a no-op).
+  if (s.bodies !== undefined && s.bodies.some((b) => b.some((seg) => eq(seg, target)))) return null;
 
   // The gut after this step: a swallow fills it with the swallowed entity; any
   // other step carries the old head's gut forward onto the new head.
@@ -143,36 +218,104 @@ function tryStep(s: GameState, dir: Dir): GameState | null {
   return { ...s, snake, cells };
 }
 
-/** Apply gravity until the snake is supported, wins, or falls into the void. */
+/**
+ * Gravity as the §2.5 GENERAL transitive-grounding SIMULTANEOUS FIXPOINT.
+ *
+ * The body set is `allBodies = [snake, ...(bodies ?? [])]`. Each iteration:
+ *   1. compute the grounded set as a transitive closure from the world grounding
+ *      sources (`groundedSet`);
+ *   2. every NON-grounded body drops 1 cell SIMULTANEOUSLY;
+ *   3. repeat to a fixpoint (all grounded), or until a body has fully crossed
+ *      `floorY` (the void).
+ * Order-independent by construction (the closure depends only on the grounded
+ * SET, not iteration order). A body may rest on ANOTHER body but never on itself.
+ *
+ * SINGLE-BODY (`bodies` absent, M2) reduces to BYTE-IDENTICAL behaviour: the
+ * branch below runs the exact original support loop (`worldGrounded` is the old
+ * `isSupported`), writes `{...cur, snake}` with NO `bodies` key, runs per-step
+ * `checkWin` (the single-body instant win), and dies once every segment is below
+ * `floorY`. This identity is the T-COOP-MIGRATE proof.
+ *
+ * MULTI-BODY (`bodies` present, Inc 4b): the per-step single-head `checkWin` does
+ * NOT fire (D28 — `checkEnd` is the win authority). Instead, after each
+ * simultaneous drop, WIN-before-death is evaluated at the step: ALL heads on their
+ * exits => `won` (terminal); else any body fully below `floorY` => `dead`. So a
+ * head reaching its exit the SAME fixpoint another body falls to the void wins
+ * (T-COOP-WIN-PRECEDENCE).
+ *
+ * STATUS-MONOTONICITY (D28): a won/dead state is terminal and does not fall —
+ * early-return the SAME reference so the no-op identity holds end-to-end.
+ */
 export function settle(s: GameState): GameState {
-  // STATUS-MONOTONICITY (D28): a won/dead state is terminal and does not fall.
-  // Early-return the SAME reference so the no-op identity holds end-to-end.
   if (s.status !== "play") return s;
+
+  // --- SINGLE-BODY (M2: `bodies` absent) — byte-identical to the Inc-0 loop. ---
+  if (s.bodies === undefined) {
+    let cur = s;
+    // Hard iteration cap (P-SETTLE-TERMINATION): the snake drops 1 per step and
+    // dies once every segment is below floorY, so it can never take more than
+    // (highest segment above floorY) + 2 steps. The +2 absorbs the boundary and
+    // the win/death check ordering. This bound is a defence-in-depth guard
+    // against a non-terminating settle; it must NEVER fire in correct operation.
+    const maxY = cur.snake.reduce((m, p) => Math.max(m, p.y), cur.floorY);
+    const cap = maxY - cur.floorY + 2;
+    let iters = 0;
+    while (cur.status === "play" && !worldGrounded(cur, cur.snake)) {
+      if (iters++ > cap) {
+        throw new Error(`settle exceeded iteration cap ${cap} (non-terminating gravity)`);
+      }
+      // Drop one cell. Preserve per-segment state (`anchored`/`carry` travel with
+      // the segment) — a falling segment keeps its intent even though it is no
+      // longer grounding (it is, by definition, not on a grip cell while falling).
+      const snake = cur.snake.map((p) => ({ ...p, y: p.y - 1 }));
+      cur = { ...cur, snake };
+      if (cur.snake.every((p) => p.y < cur.floorY)) {
+        cur = { ...cur, status: "dead" };
+        break;
+      }
+      cur = checkWin(cur);
+    }
+    return cur;
+  }
+
+  // --- MULTI-BODY (Inc 4b) — the general simultaneous fixpoint. ---
   let cur = s;
-  // Hard iteration cap (P-SETTLE-TERMINATION): the snake drops 1 per step and
-  // dies once every segment is below floorY, so it can never take more than
-  // (highest segment above floorY) + 2 steps. The +2 absorbs the boundary and
-  // the win/death check ordering. This bound is a defence-in-depth guard against
-  // a future non-terminating settle; it must NEVER fire in correct operation.
-  const maxY = cur.snake.reduce((m, p) => Math.max(m, p.y), cur.floorY);
+  let bodies = allBodies(cur); // [snake, ...others]; mutated to fresh arrays as they drop
+  // Cap: the highest segment of ANY body over the floor, +2 (same bound shape as
+  // the single-body case; every ungrounded body strictly descends 1 per step).
+  let maxY = cur.floorY;
+  for (const b of bodies) for (const seg of b) maxY = Math.max(maxY, seg.y);
   const cap = maxY - cur.floorY + 2;
   let iters = 0;
-  while (cur.status === "play" && !isSupported(cur)) {
+
+  for (;;) {
+    const grounded = groundedSet(cur, bodies);
+    if (grounded.every((g) => g)) break; // fixpoint: every body rests
     if (iters++ > cap) {
       throw new Error(`settle exceeded iteration cap ${cap} (non-terminating gravity)`);
     }
-    // Drop one cell. Preserve per-segment state (`anchored` travels with the
-    // segment) — a falling segment keeps its intent even though it is no longer
-    // grounding (it is, by definition, not on a grip cell while falling).
-    const snake = cur.snake.map((p) => ({ ...p, y: p.y - 1 }));
-    cur = { ...cur, snake };
-    if (cur.snake.every((p) => p.y < cur.floorY)) {
+    // Drop every ungrounded body by 1 cell SIMULTANEOUSLY.
+    bodies = bodies.map((b, i) => (grounded[i] ? b : b.map((p) => ({ ...p, y: p.y - 1 }))));
+    cur = withBodies(cur, bodies);
+    // WIN-before-death at this step (D28): all heads on exits wins even if a body
+    // would fall to void this same fixpoint (T-COOP-WIN-PRECEDENCE).
+    if (allHeadsWin(cur)) {
+      cur = { ...cur, status: "won" };
+      break;
+    }
+    if (bodies.some((b) => b.every((p) => p.y < cur.floorY))) {
       cur = { ...cur, status: "dead" };
       break;
     }
-    cur = checkWin(cur);
   }
   return cur;
+}
+
+/** Reassemble a multi-body state from a `[snake, ...others]` array, keeping the
+ *  M2 invariant: the active body goes back to `snake`, the rest to `bodies`. Used
+ *  only on the multi-body path, so `bodies` is always present and non-empty. */
+function withBodies(s: GameState, bodies: Segment[][]): GameState {
+  return { ...s, snake: bodies[0], bodies: bodies.slice(1) };
 }
 
 /**
@@ -212,9 +355,11 @@ export function applyMechanisms(s: GameState): GameState {
   }
   if (!hasMech) return s;
 
-  // Every segment of every body (Inc 4 adds `bodies`; today just `snake`).
+  // Every segment of every body (Inc 4b: the active `snake` PLUS any co-op
+  // `bodies`). Occupancy is existential ("any segment of any body"), so it is
+  // order-independent across bodies — T-MECH-3.
   const occupied = new Set<string>();
-  for (const seg of s.snake) occupied.add(key(seg));
+  for (const body of allBodies(s)) for (const seg of body) occupied.add(key(seg));
 
   // triggers = plate ids currently under any segment.
   const triggers = new Set<string>();
@@ -253,17 +398,28 @@ function sameSet(a: Set<string> | undefined, b: Set<string>): boolean {
 const EMPTY_SET: ReadonlySet<string> = new Set<string>();
 
 /**
- * The end-of-turn guard. For the SINGLE body it is a REDUNDANT final win check
- * (the instant win already fired during settle / strike flight); it becomes the
- * sole win authority in multi-body play (Inc 4, WIN-before-death). Today it is
- * exactly the existing single-head win check.
+ * The end-of-turn guard.
+ *
+ * SINGLE-BODY (`bodies` absent): a REDUNDANT final win check — the instant win
+ * already fired during settle / strike flight. Byte-identical to the old
+ * single-head `checkWin`.
+ *
+ * MULTI-BODY (`bodies` present, Inc 4b / D28): the SOLE win authority. WIN is
+ * evaluated BEFORE death: ALL heads on their exits => `won`, taking precedence
+ * over a body in the void the same fixpoint (T-COOP-WIN-PRECEDENCE); else any
+ * body fully below `floorY` => `dead`. The per-step single-head early-win does NOT
+ * fire while `bodies` is present, so this is consistent with the settle path.
  *
  * STATUS-MONOTONICITY (D28): a no-op on a terminal state — a `won`/`dead` status
  * is never downgraded or overwritten.
  */
 export function checkEnd(s: GameState): GameState {
   if (s.status !== "play") return s;
-  return checkWin(s);
+  if (s.bodies === undefined) return checkWin(s);
+  // WIN before death (D28).
+  if (allHeadsWin(s)) return { ...s, status: "won" };
+  if (allBodies(s).some((b) => b.every((p) => p.y < s.floorY))) return { ...s, status: "dead" };
+  return s;
 }
 
 /**
@@ -330,6 +486,27 @@ export function anchor(s: GameState): GameState {
 }
 
 /**
+ * Cycle which co-op body is ACTIVE (Inc 4b, §2.2.10 / Tab). The active body is
+ * always `snake`; the rest live in `bodies`. Cycling rotates the active pointer
+ * forward through `[snake, ...bodies]`, so a sequence of Tabs visits every body
+ * and returns to the start. Verbs always act on the active body only.
+ *
+ * - NO-OP (same reference) on a single-snake state (M2: no `bodies`, nothing to
+ *   switch to) or a terminal state — so the shell's `next === state` no-op
+ *   detection holds and a Tab on a one-body room never logs a move.
+ * - Pure: rotates the array; segment objects are shared (only the container moves).
+ * - Switching does NOT run settle — it only changes whose verbs apply; the world
+ *   is already at rest from the previous resolve.
+ */
+export function switchBody(s: GameState): GameState {
+  if (s.status !== "play") return s;
+  if (s.bodies === undefined || s.bodies.length === 0) return s; // nothing to switch to
+  const all = allBodies(s); // [snake, ...bodies]
+  const rotated = [...all.slice(1), all[0]]; // next body becomes active
+  return { ...s, snake: rotated[0], bodies: rotated.slice(1) };
+}
+
+/**
  * Deposit the head's carried entity into the adjacent cell in `dir` (Inc 4,
  * §2.2.8 / §2.2.9). The carried entity becomes a normal `cells` entity again — a
  * deposited `object` (solid + supports) is then static structure: it blocks a
@@ -361,9 +538,10 @@ export function deposit(s: GameState, dir: Dir): GameState {
   const carried = head.carry;
   if (carried === undefined) return s; // empty gut: nothing to deposit
   const target: Vec = { x: head.x + dir.x, y: head.y + dir.y };
-  // The target must be empty: no existing cell entity AND no snake segment.
+  // The target must be empty: no existing cell entity AND no segment of ANY body
+  // (Inc 4b: a co-op body blocks a deposit just as the active body does).
   if (cellAt(s, target) !== undefined) return s;
-  if (s.snake.some((seg) => eq(seg, target))) return s;
+  if (allBodies(s).some((b) => b.some((seg) => eq(seg, target)))) return s;
 
   // Drop the carry from the head; place the entity into the target cell.
   const newHead = { ...head };

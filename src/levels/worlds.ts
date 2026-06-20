@@ -5,7 +5,9 @@
 //
 // Inc 1 ships World 1 (Hatchling), R1-R7. Later increments append worlds here.
 
-import type { LevelDef, Vec } from "../core/types";
+import type { GameState, LevelDef, Vec } from "../core/types";
+import { buildState } from "../core/game";
+import { buildCoop, coopLevel } from "./world7/coop-room";
 import { r1 } from "./world1/r1";
 import { r2 } from "./world1/r2";
 import { r3 } from "./world1/r3";
@@ -40,6 +42,13 @@ import { r3 as w6r3 } from "./world6/r3";
 import { r4 as w6r4 } from "./world6/r4";
 import { r5 as w6r5 } from "./world6/r5";
 import { r6 as w6r6 } from "./world6/r6";
+import { r1 as w7r1 } from "./world7/r1";
+import { r2 as w7r2 } from "./world7/r2";
+import { r3 as w7r3 } from "./world7/r3";
+import { r4 as w7r4 } from "./world7/r4";
+import { r1 as w8r1 } from "./world8/r1";
+import { r2 as w8r2 } from "./world8/r2";
+import { r3 as w8r3 } from "./world8/r3";
 
 /** An optional per-room scoring constraint (the "constraint egg", §2.7). It is a
  *  pure predicate over the recorded solve, evaluated OUTSIDE the core. Inc 1 only
@@ -58,7 +67,19 @@ export interface Constraint {
 export interface RoomMeta {
   /** Stable id, e.g. "w1r1". */
   id: string;
+  /** A single-snake level definition. For ordinary rooms this is the playable
+   *  level; for a CO-OP room (World 7, §2.2.10) it is a single-snake PROJECTION
+   *  (active body + cells) used only by the shell/renderer for camera framing and
+   *  a non-crashing fallback — the playable multi-body state comes from `build`. */
   level: LevelDef;
+  /** How to build the live, already-settled playable state. ABSENT for ordinary
+   *  rooms (the shell uses `buildState(level)`); PRESENT for co-op rooms, where it
+   *  constructs the multi-body state (`bodies` populated) the single-snake `level`
+   *  cannot express. The single uniform accessor `buildRoom(meta)` hides the choice. */
+  build?: () => GameState;
+  /** True for a World-7 co-op room (two bodies; Tab cycles the active one). The
+   *  shell reads this to label the room / enable the Tab control hint. */
+  coop?: boolean;
   /** Hand-authored optimal move count (§2.7); == the recorded solution length. */
   par: number;
   /** Optional constraint egg. */
@@ -181,7 +202,50 @@ export const WORLDS: World[] = [
       { id: "w6r6", level: w6r6, par: 8, hiddenEgg: true, eggAt: { x: 5, y: 2 } },
     ],
   },
+  {
+    // World 7 "Two Bodies" (STRETCH, §2.2.10 / D-OUT-5) — the co-op world. Two
+    // snakes share a room; you control one at a time and Tab cycles which. Win =
+    // ALL heads on exits (the multi-body checkEnd authority). The curriculum:
+    // R1 teaches Tab + both-heads-win; R2 the RELAY (one body holds a plate so the
+    // other can pass its gate); R3 the MUTUAL relay (each opens the other's gate,
+    // forced alternation); R4 the three-stage capstone. Every room is UNSOLVABLE
+    // without Tab (the inactive body cannot move) and its gates are load-bearing —
+    // rooms.test pins both. These rooms are co-op (multi-body), so they carry a
+    // `build` (buildCoop) and a single-snake `level` PROJECTION for the renderer.
+    // Pars are BFS-shortest over move+strike+switch (honest par).
+    id: "w7",
+    name: "Two Bodies",
+    rooms: [
+      { id: "w7r1", level: coopLevel(w7r1), build: () => buildCoop(w7r1), coop: true, par: 3, hiddenEgg: false },
+      { id: "w7r2", level: coopLevel(w7r2), build: () => buildCoop(w7r2), coop: true, par: 11, hiddenEgg: false },
+      { id: "w7r3", level: coopLevel(w7r3), build: () => buildCoop(w7r3), coop: true, par: 14, hiddenEgg: false, constraint: { label: "in turn", maxMoves: 14 } },
+      { id: "w7r4", level: coopLevel(w7r4), build: () => buildCoop(w7r4), coop: true, par: 19, hiddenEgg: false },
+    ],
+  },
+  {
+    // World 8 "Recombination" — the FINALE (§1.3 Inc-4 finale). Single-body capstone
+    // rooms that recombine ONLY shipped abilities (carry/strike/deposit/anchor) —
+    // NO new model. R1 carry+strike over a chasm; R2 carry+deposit+strike over a
+    // wider one; R3 anchor-climb + strike off the spire. Each room's combined
+    // mechanics are load-bearing (rooms.test pins "unsolvable without strike"
+    // etc.). Pars are BFS-shortest over the full verb set (honest par).
+    id: "w8",
+    name: "Recombination",
+    rooms: [
+      { id: "w8r1", level: w8r1, par: 6, hiddenEgg: false },
+      { id: "w8r2", level: w8r2, par: 8, hiddenEgg: false },
+      { id: "w8r3", level: w8r3, par: 10, hiddenEgg: false, constraint: { label: "clean ascent", maxMoves: 10 } },
+    ],
+  },
 ];
+
+/** The single uniform accessor for a room's live, already-settled playable state:
+ *  a co-op room's `build` (multi-body) if present, else `buildState(level)`. The
+ *  shell and the room oracles both route through this so the single-vs-multi-body
+ *  choice lives in ONE place. */
+export function buildRoom(meta: RoomMeta): GameState {
+  return meta.build ? meta.build() : buildState(meta.level);
+}
 
 /** Flat ordered list of all rooms across all worlds (shell convenience). */
 export const ALL_ROOMS: RoomMeta[] = WORLDS.flatMap((w) => w.rooms);
