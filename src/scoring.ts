@@ -13,9 +13,10 @@
 // exactly the task's preferred path. (Authors place a visible fruit at `eggAt` as
 // the on-board lure; eating it is incidental — collection is purely positional.)
 
-import type { GameState, Segment, Vec } from "./core/types";
+import type { GameState, Vec } from "./core/types";
 import type { Constraint, RoomMeta } from "./levels/worlds";
 import type { LoggedAction } from "./levels/replay";
+import { allBodies } from "./core/game";
 
 /** The three eggs a room can yield (HLD §2.7). Each is a pure boolean over the run. */
 export interface Eggs {
@@ -30,13 +31,6 @@ export interface Eggs {
 /** Did the run win? (Solve egg.) The trace's LAST state is the current state. */
 export function solved(trace: GameState[]): boolean {
   return trace.length > 0 && trace[trace.length - 1].status === "won";
-}
-
-/** All bodies present in a co-op state: the active snake plus any other bodies
- *  (Inc 4b / World 7). A single-snake state has `bodies` absent, so this is just
- *  `[snake]` there — the kernel's `allBodies = [snake, ...(bodies ?? [])]`. */
-function allBodies(s: GameState): Segment[][] {
-  return [s.snake, ...(s.bodies ?? [])];
 }
 
 /** Was the hidden-egg cell `at` occupied by ANY segment of ANY body in ANY trace

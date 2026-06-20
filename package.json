@@ -1,6 +1,6 @@
 {
   "name": "coil",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "description": "Coil — a discrete 2.5D snake puzzle game (gravity + your own body).",

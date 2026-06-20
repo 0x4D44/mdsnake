@@ -147,13 +147,9 @@ describe("T-EGG-COOP — scoring iterates all co-op bodies", () => {
         [[{ x: 0, y: 5 }, { x: 1, y: 5 }, { x: 2, y: 5 }, { x: 3, y: 5 }]],
       ),
     ];
-    // maxLength 3 is violated by the length-4 co-op body even though the active
-    // snake never exceeds 2.
-    expect(constraintMet(t, [], { label: "x", maxLength: 3 })).toBe(false);
-    // maxLength 4 admits it.
-    expect(
-      constraintMet(t, [], { label: "x", maxLength: 4 }),
-    ).toBe(false); // not solved yet -> still false
+    // A constraint never counts on an unsolved run, independent of length.
+    // (The co-op peak-length logic itself is pinned by the won-trace pair below.)
+    expect(constraintMet(t, [], { label: "x", maxLength: 4 })).toBe(false);
     const tWon: GameState[] = [
       t[0],
       coopState(
