@@ -8,34 +8,23 @@
 // asserts the room becomes UNSOLVABLE, proving the mechanic is required, not
 // decorative.
 //
-// Each room's `par` (in worlds.ts) == its recorded solution length (honest par),
-// and the win must land on the FINAL move, not before.
+// F4 minimality: each room's `par` (in worlds.ts) is the BFS-shortest solution over
+// move+strike (not merely the recorded-solution length), and the win must land on
+// the FINAL move. Recorded solutions and the BFS solver come from the shared modules
+// (../solutions, ../bfs).
 
 import { describe, expect, it } from "vitest";
-import { buildState, DIRS, move, strike } from "../../core/game";
-import { k, m, replay } from "../replay";
-import type { Solution } from "../replay";
+import { buildState } from "../../core/game";
+import { replay } from "../replay";
+import { bfsSolve } from "../bfs";
+import { SOLUTIONS as ALL_SOLUTIONS } from "../solutions";
 import { WORLDS } from "../worlds";
 import type { Entity, GameState, LevelDef } from "../../core/types";
 
-// Recorded BFS-optimal solutions, keyed by room id.
-const SOLUTIONS: Record<string, Solution> = {
-  // R1 First Press: walk onto the plate, through the (now-open, then occupied)
-  // gate, onto the exit.
-  w4r1: [m("right"), m("right"), m("right")],
-  // R2 Bridge of Self: the length-3 body spans plate->gate as it advances, so a
-  // rear segment holds the plate while the head crosses the open gate.
-  w4r2: [m("right"), m("right"), m("right")],
-  // R3 Hold and Climb: strike to the shaft foot, step onto the plate (gate opens),
-  // strike up through the open gate to the exit (win mid-flight).
-  w4r3: [k("right"), m("up"), k("up")],
-  // R4 Two Doors: press g1, then thread both id-keyed gates to the exit.
-  w4r4: [m("right"), k("right"), k("right")],
-  // R5 Pressure Chamber: grow, hold g1 with a body segment, thread both gates.
-  w4r5: [k("right"), m("up"), m("left"), m("up"), k("up"), m("right"), k("up")],
-};
-
 const ROOMS = WORLDS.find((w) => w.id === "w4")!.rooms;
+const IDS = ROOMS.map((r) => r.id);
+const SOLUTIONS = Object.fromEntries(IDS.map((id) => [id, ALL_SOLUTIONS[id]]));
+
 function lookup(id: string): { level: LevelDef; par: number } {
   const room = ROOMS.find((r) => r.id === id);
   if (!room) throw new Error(`no room ${id}`);
@@ -62,41 +51,12 @@ function pinGatesSolid(level: LevelDef): GameState {
   return { ...s, cells };
 }
 
-/** Exhaustive BFS over move+strike. Returns true if any win is reachable. */
-function solvable(start: GameState, maxDepth = 26): boolean {
-  if (start.status === "won") return true;
-  if (start.status === "dead") return false;
-  const key = (s: GameState) =>
-    s.status + "|" + s.snake.map((p) => `${p.x},${p.y}`).join(";") + "|" + [...(s.triggers ?? [])].sort().join(",");
-  const seen = new Set<string>([key(start)]);
-  let frontier: GameState[] = [start];
-  const verbs: ((s: GameState) => GameState)[] = [
-    (s) => move(s, DIRS.up), (s) => move(s, DIRS.down), (s) => move(s, DIRS.left), (s) => move(s, DIRS.right),
-    (s) => strike(s, DIRS.up), (s) => strike(s, DIRS.down), (s) => strike(s, DIRS.left), (s) => strike(s, DIRS.right),
-  ];
-  for (let d = 0; d < maxDepth; d++) {
-    const next: GameState[] = [];
-    for (const node of frontier) for (const fn of verbs) {
-      const ns = fn(node);
-      if (ns === node) continue;
-      if (ns.status === "won") return true;
-      if (ns.status === "dead") continue;
-      const kk = key(ns);
-      if (seen.has(kk)) continue;
-      seen.add(kk); next.push(ns);
-    }
-    frontier = next;
-    if (!frontier.length) break;
-  }
-  return false;
-}
-
 describe("T-ROOM-SOLVE — World 4 (Pressure) rooms are solvable", () => {
   it("every World-4 room has a recorded solution", () => {
     expect(Object.keys(SOLUTIONS).sort()).toEqual(ROOMS.map((r) => r.id).sort());
   });
 
-  for (const id of Object.keys(SOLUTIONS)) {
+  for (const id of IDS) {
     it(`${id} reaches 'won' on its recorded solution`, () => {
       const { level } = lookup(id);
       const final = replay(buildState(level), SOLUTIONS[id]);
@@ -106,6 +66,14 @@ describe("T-ROOM-SOLVE — World 4 (Pressure) rooms are solvable", () => {
     it(`${id} par equals its recorded solution length`, () => {
       const { par } = lookup(id);
       expect(par).toBe(SOLUTIONS[id].length);
+    });
+
+    // F4 minimality: par IS the BFS-shortest path over move+strike.
+    it(`${id} par is the BFS-shortest solution length (true minimality)`, () => {
+      const { level, par } = lookup(id);
+      const sol = bfsSolve(buildState(level), ["move", "strike"]);
+      expect(sol).not.toBeNull();
+      expect(sol!.length).toBe(par);
     });
 
     it(`${id} is not yet won before its final move`, () => {
@@ -118,7 +86,7 @@ describe("T-ROOM-SOLVE — World 4 (Pressure) rooms are solvable", () => {
 
     it(`${id} is UNSOLVABLE with every gate pinned solid (mechanic is load-bearing)`, () => {
       const { level } = lookup(id);
-      expect(solvable(pinGatesSolid(level))).toBe(false);
+      expect(bfsSolve(pinGatesSolid(level), ["move", "strike"])).toBeNull();
     });
   }
 });

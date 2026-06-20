@@ -79,8 +79,16 @@ export class ProgressStore {
     return parseProgress(this.storage.getItem(PROGRESS_KEY));
   }
 
+  /** Persist `p` to the single key. A throwing backend (quota exceeded, storage
+   *  denied in private mode) must NOT break the win/commit flow — the in-memory
+   *  Progress the caller already holds is authoritative for this session, so a
+   *  failed write is swallowed (progress for this session is simply not persisted). */
   private save(p: Progress): void {
-    this.storage.setItem(PROGRESS_KEY, serializeProgress(p));
+    try {
+      this.storage.setItem(PROGRESS_KEY, serializeProgress(p));
+    } catch {
+      // Storage unavailable (quota/denied) — keep the run going regardless.
+    }
   }
 
   /** Bank a run's eggs for a room (OR-merge: never un-bank a previously earned

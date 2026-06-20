@@ -7,67 +7,27 @@
 // move/strike alone (an exhaustive BFS over move+strike finds no win), proving the
 // anchor mechanic is load-bearing here, not decorative.
 //
-// Each room's `par` (in worlds.ts) == its recorded solution length, and the
-// honest-par guard asserts the win lands on the final move.
+// F4 minimality: each room's `par` (in worlds.ts) is the BFS-shortest solution over
+// move+strike+anchor (not merely the recorded-solution length), and the honest-par
+// guard asserts the win lands on the final move. Recorded solutions and the BFS
+// solver are imported from the shared modules (../solutions, ../bfs).
 
 import { describe, expect, it } from "vitest";
-import { anchor, buildState, DIRS, move, strike } from "../../core/game";
-import { a, k, m, replay } from "../replay";
-import type { Solution } from "../replay";
+import { buildState } from "../../core/game";
+import { replay } from "../replay";
+import { bfsSolve } from "../bfs";
+import { SOLUTIONS as ALL_SOLUTIONS } from "../solutions";
 import { WORLDS } from "../worlds";
-import type { GameState, LevelDef } from "../../core/types";
-
-// Recorded optimal solutions, keyed by room id. `a()` is the anchor toggle.
-const SOLUTIONS: Record<string, Solution> = {
-  // R1 First Grip: one free step up (still grounded), then climb by re-anchoring
-  // the head beside the wall after each up-move, then step onto the exit.
-  w3r1: [m("up"), a(), m("up"), a(), m("up"), m("left")],
-  // R2 Ascent: the same climb rhythm, one cell taller (three anchored steps).
-  w3r2: [m("up"), a(), m("up"), a(), m("up"), a(), m("up"), m("left")],
-  // R3 Traverse: bring the head beside the wall, climb, then step off onto the ledge.
-  w3r3: [m("left"), m("up"), a(), m("up"), a(), m("up"), m("right")],
-  // R4 Release (twist): climb the wall, then strike the head off it across the void
-  // to the exit (release-timing).
-  w3r4: [m("left"), m("up"), a(), m("up"), a(), m("up"), k("right")],
-  // R5 Graduation: climb, strike across the gap onto the lip, step onto the exit.
-  w3r5: [m("left"), m("up"), a(), m("up"), a(), m("up"), k("right"), m("right")],
-};
+import type { LevelDef } from "../../core/types";
 
 const ROOMS = WORLDS.find((w) => w.id === "w3")!.rooms;
+const IDS = ROOMS.map((r) => r.id);
+const SOLUTIONS = Object.fromEntries(IDS.map((id) => [id, ALL_SOLUTIONS[id]]));
+
 function lookup(id: string): { level: LevelDef; par: number } {
   const room = ROOMS.find((r) => r.id === id);
   if (!room) throw new Error(`no room ${id}`);
   return room;
-}
-
-/** Exhaustive BFS over move+strike ONLY (no anchor). Returns true if any win is
- *  reachable — used to prove the anchor mechanic is required. */
-function solvableWithoutAnchor(start: GameState, maxDepth = 20): boolean {
-  void anchor; // anchor deliberately excluded from the verb set below
-  const key = (s: GameState) => s.status + "|" + s.snake.map((p) => `${p.x},${p.y},${p.anchored ? 1 : 0}`).join(";");
-  const seen = new Set<string>([key(start)]);
-  let frontier: GameState[] = [start];
-  const verbs: ((s: GameState) => GameState)[] = [
-    (s) => move(s, DIRS.up), (s) => move(s, DIRS.down),
-    (s) => move(s, DIRS.left), (s) => move(s, DIRS.right),
-    (s) => strike(s, DIRS.up), (s) => strike(s, DIRS.down),
-    (s) => strike(s, DIRS.left), (s) => strike(s, DIRS.right),
-  ];
-  for (let d = 0; d < maxDepth; d++) {
-    const next: GameState[] = [];
-    for (const node of frontier) for (const fn of verbs) {
-      const ns = fn(node);
-      if (ns === node) continue;
-      if (ns.status === "won") return true;
-      if (ns.status === "dead") continue;
-      const kk = key(ns);
-      if (seen.has(kk)) continue;
-      seen.add(kk); next.push(ns);
-    }
-    frontier = next;
-    if (!frontier.length) break;
-  }
-  return false;
 }
 
 describe("T-ROOM-SOLVE — World 3 (The Climb) rooms are solvable", () => {
@@ -75,7 +35,7 @@ describe("T-ROOM-SOLVE — World 3 (The Climb) rooms are solvable", () => {
     expect(Object.keys(SOLUTIONS).sort()).toEqual(ROOMS.map((r) => r.id).sort());
   });
 
-  for (const id of Object.keys(SOLUTIONS)) {
+  for (const id of IDS) {
     it(`${id} reaches 'won' on its recorded solution`, () => {
       const { level } = lookup(id);
       const final = replay(buildState(level), SOLUTIONS[id]);
@@ -85,6 +45,14 @@ describe("T-ROOM-SOLVE — World 3 (The Climb) rooms are solvable", () => {
     it(`${id} par equals its recorded solution length`, () => {
       const { par } = lookup(id);
       expect(par).toBe(SOLUTIONS[id].length);
+    });
+
+    // F4 minimality: par IS the BFS-shortest path over the full verb set.
+    it(`${id} par is the BFS-shortest solution length (true minimality)`, () => {
+      const { level, par } = lookup(id);
+      const sol = bfsSolve(buildState(level), ["move", "strike", "anchor"]);
+      expect(sol).not.toBeNull();
+      expect(sol!.length).toBe(par);
     });
 
     it(`${id} is not yet won before its final move`, () => {
@@ -101,7 +69,7 @@ describe("T-ROOM-SOLVE — World 3 (The Climb) rooms are solvable", () => {
 
     it(`${id} is UNSOLVABLE without the anchor verb (mechanic is load-bearing)`, () => {
       const { level } = lookup(id);
-      expect(solvableWithoutAnchor(buildState(level))).toBe(false);
+      expect(bfsSolve(buildState(level), ["move", "strike"])).toBeNull();
     });
   }
 });

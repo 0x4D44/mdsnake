@@ -108,6 +108,66 @@ describe("T-EGG-HIDDEN — hidden egg is positional over the trace", () => {
 });
 
 // ---------------------------------------------------------------------------
+// T-EGG-COOP (F2): in a co-op room a hidden egg touched ONLY by a non-active body
+// is still credited, and peak length is taken over ALL bodies (active + others).
+// ---------------------------------------------------------------------------
+describe("T-EGG-COOP — scoring iterates all co-op bodies", () => {
+  const coopState = (
+    snake: GameState["snake"],
+    bodies: GameState["snake"][],
+    status: GameState["status"] = "play",
+  ): GameState => ({
+    snake,
+    bodies,
+    cells: new Map(),
+    strikeRange: 1,
+    floorY: 0,
+    status,
+    name: "coop",
+  });
+
+  it("a hidden egg touched only by a NON-active body is credited", () => {
+    const eggAt = { x: 5, y: 3 };
+    // The active snake never visits (5,3); the OTHER body sits on it.
+    const t: GameState[] = [
+      coopState([{ x: 0, y: 1 }], [[{ x: 9, y: 9 }]]),
+      coopState([{ x: 1, y: 1 }], [[{ x: 5, y: 3 }]]), // non-active body on the egg
+    ];
+    // Active body alone never touches it.
+    expect(t.some((s) => s.snake.some((p) => p.x === 5 && p.y === 3))).toBe(false);
+    expect(touchedHidden(t, eggAt)).toBe(true);
+  });
+
+  it("peak length is taken over ALL bodies, not just the active snake", () => {
+    // Active snake stays length 2; a co-op body grows to length 4.
+    const t: GameState[] = [
+      coopState([{ x: 0, y: 0 }, { x: 1, y: 0 }], [[{ x: 0, y: 5 }, { x: 1, y: 5 }]]),
+      coopState(
+        [{ x: 0, y: 0 }, { x: 1, y: 0 }],
+        [[{ x: 0, y: 5 }, { x: 1, y: 5 }, { x: 2, y: 5 }, { x: 3, y: 5 }]],
+      ),
+    ];
+    // maxLength 3 is violated by the length-4 co-op body even though the active
+    // snake never exceeds 2.
+    expect(constraintMet(t, [], { label: "x", maxLength: 3 })).toBe(false);
+    // maxLength 4 admits it.
+    expect(
+      constraintMet(t, [], { label: "x", maxLength: 4 }),
+    ).toBe(false); // not solved yet -> still false
+    const tWon: GameState[] = [
+      t[0],
+      coopState(
+        [{ x: 0, y: 0 }, { x: 1, y: 0 }],
+        [[{ x: 0, y: 5 }, { x: 1, y: 5 }, { x: 2, y: 5 }, { x: 3, y: 5 }]],
+        "won",
+      ),
+    ];
+    expect(constraintMet(tWon, [], { label: "x", maxLength: 4 })).toBe(true);
+    expect(constraintMet(tWon, [], { label: "x", maxLength: 3 })).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // T-EGG-CONSTRAINT (§4.5): the constraint predicate is true for a compliant solve,
 // false for a violating one (maxMoves / maxLength / noStrike).
 // ---------------------------------------------------------------------------

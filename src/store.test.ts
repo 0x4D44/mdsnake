@@ -85,6 +85,36 @@ describe("T-PERSIST — progress (de)serialization round-trip", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Store robustness: a throwing/denied storage backend must not break the
+// win/commit flow, and malformed persisted JSON must fall back to the default.
+// ---------------------------------------------------------------------------
+describe("ProgressStore robustness", () => {
+  it("save swallows a throwing StorageLike (quota/denied cannot break commit)", () => {
+    const throwing: StorageLike = {
+      getItem: () => null,
+      setItem: () => {
+        throw new Error("QuotaExceededError");
+      },
+    };
+    const store = new ProgressStore(throwing);
+    // recordEggs / unlockWorld both write; neither must throw, and both must
+    // still return the in-memory Progress the caller relies on.
+    expect(() => store.recordEggs("w6r1", { solve: true, hidden: true, constraint: false }))
+      .not.toThrow();
+    const p = store.unlockWorld(2);
+    expect(p.highestWorld).toBe(2);
+  });
+
+  it("load tolerates malformed persisted JSON (returns the default)", () => {
+    const tampered: StorageLike = {
+      getItem: () => "}{ not valid json",
+      setItem: () => {},
+    };
+    expect(new ProgressStore(tampered).load()).toEqual({ highestWorld: 0, rooms: {} });
+  });
+});
+
+// ---------------------------------------------------------------------------
 // T-GATING: world-unlock reachable by SOLVE eggs alone (no main-path wall) +
 //           a skip-after-K path.
 // ---------------------------------------------------------------------------

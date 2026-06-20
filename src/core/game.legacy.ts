@@ -4,8 +4,10 @@
 // resolve-tail extraction (`resolve = checkEnd(applyMechanisms(settle(s)))`). It
 // exists solely as the OLD comparand for T-RESOLVE-EQUIV (resolve-equiv.test.ts,
 // HLD §4.3 / D21): the differential oracle proves the NEW kernel's `move`/`strike`
-// are deep-equal to these (mechanisms absent). Per the HLD it is deleted once Inc 3
-// lands green. NEVER edit this file — a divergence here is the comparand, not the spec.
+// are deep-equal to these (mechanisms absent). It is KEPT — NOT deleted — for as
+// long as T-RESOLVE-EQUIV runs: this frozen kernel IS that test's live comparand,
+// so removing it would delete the oracle. NEVER edit this file — a divergence here
+// is the comparand, not the spec.
 //
 // ---------------------------------------------------------------------------
 // Coil sim core — the single source of truth for the rules.

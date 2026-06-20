@@ -3,41 +3,46 @@
 // `status === 'won'`. "Solvable" is the machine floor; fun/difficulty is judged by
 // the D24 human playtest, not an oracle.
 //
-// Each room's `par` (in worlds.ts) is set to its recorded solution length, and the
-// honest-par guard asserts the room is NOT yet won before the final move (so par is
-// not inflated by trailing no-ops). The recorded solutions were found by an
-// exhaustive BFS over the verb set and are the optimal move counts.
+// Each room's `par` (in worlds.ts) is its recorded solution length AND its true
+// shortest path: T-PAR here asserts `bfsSolve(...).length === par` (F4 real
+// minimality, not the tautological par == recorded-length). Recorded solutions are
+// imported from the canonical SOLUTIONS map (../solutions).
+//
+// F5 load-bearing guard: World 2 teaches LENGTH-AS-REACH. The oracle (not the room
+// comments) decides which rooms actually NEED growth: with every fruit removed, only
+// R2 (the 2-cell-gap Bridge) becomes UNSOLVABLE — growth is load-bearing there.
+// R1 and R5 still solve at starting length (their 1-cell gaps / strike clear without
+// growing), and R3 (Curl) / R4 (Restraint twist, solved WITHOUT eating) need no
+// growth — so those four get no false growth guard. See GROW_REQUIRED below.
 
 import { describe, expect, it } from "vitest";
 import { buildState } from "../../core/game";
-import { k, m, replay } from "../replay";
-import type { Solution } from "../replay";
+import { replay } from "../replay";
+import { bfsSolve } from "../bfs";
+import { SOLUTIONS as ALL_SOLUTIONS } from "../solutions";
 import { WORLDS } from "../worlds";
 import type { LevelDef } from "../../core/types";
 
-// Recorded optimal solutions, keyed by room id.
-const SOLUTIONS: Record<string, Solution> = {
-  // R1 Reach: eat the fruit to grow, then walk across the 1-cell gap (the longer
-  // body keeps a segment over the near/far floor), step onto the exit.
-  w2r1: [m("right"), m("right"), m("right"), m("right"), m("right")],
-  // R2 Bridge: eat BOTH fruit (length 4), then walk across the 2-cell gap.
-  w2r2: [m("right"), m("right"), m("right"), m("right"), m("right")],
-  // R3 Curl: walk the head right off the ledge end; the curl drops it onto the
-  // tucked exit (win-during-fall).
-  w2r3: [m("right"), m("right")],
-  // R4 Restraint (twist): ignore the fruit behind you — strike across the gap onto
-  // the ledge, then step onto the exit. Stays length 2 (satisfies the constraint).
-  w2r4: [k("right"), m("right")],
-  // R5 Graduation: walk onto the forced fruit (grow), then strike across the gap
-  // onto the exit (win on the strike).
-  w2r5: [m("right"), k("right")],
-};
-
 const ROOMS = WORLDS.find((w) => w.id === "w2")!.rooms;
+const IDS = ROOMS.map((r) => r.id);
+const SOLUTIONS = Object.fromEntries(IDS.map((id) => [id, ALL_SOLUTIONS[id]]));
+
+// Rooms where removing all fruit makes the room UNSOLVABLE (BFS-verified) — growth
+// is genuinely required. Only R2's 2-cell gap qualifies; R1/R5 still solve at
+// starting length, and R3/R4 never need growth.
+const GROW_REQUIRED = ["w2r2"];
+
 function lookup(id: string): { level: LevelDef; par: number } {
   const room = ROOMS.find((r) => r.id === id);
   if (!room) throw new Error(`no room ${id}`);
   return room;
+}
+
+/** A level with every fruit removed — the snake can never grow, so it stays pinned
+ *  at its starting length. If a grow-to-span room is unsolvable like this, growth is
+ *  load-bearing. */
+function withoutFruit(level: LevelDef): LevelDef {
+  return { ...level, cells: level.cells.filter((c) => c.type !== "fruit") };
 }
 
 describe("T-ROOM-SOLVE — World 2 (Growth) rooms are solvable", () => {
@@ -45,7 +50,7 @@ describe("T-ROOM-SOLVE — World 2 (Growth) rooms are solvable", () => {
     expect(Object.keys(SOLUTIONS).sort()).toEqual(ROOMS.map((r) => r.id).sort());
   });
 
-  for (const id of Object.keys(SOLUTIONS)) {
+  for (const id of IDS) {
     it(`${id} reaches 'won' on its recorded solution`, () => {
       const { level } = lookup(id);
       const final = replay(buildState(level), SOLUTIONS[id]);
@@ -57,6 +62,14 @@ describe("T-ROOM-SOLVE — World 2 (Growth) rooms are solvable", () => {
       expect(par).toBe(SOLUTIONS[id].length);
     });
 
+    // F4 minimality: par IS the BFS-shortest path over move+strike.
+    it(`${id} par is the BFS-shortest solution length (true minimality)`, () => {
+      const { level, par } = lookup(id);
+      const sol = bfsSolve(buildState(level), ["move", "strike"]);
+      expect(sol).not.toBeNull();
+      expect(sol!.length).toBe(par);
+    });
+
     // Honest-par guard: the room must win on the LAST recorded move, not earlier.
     it(`${id} is not yet won before its final move`, () => {
       const sol = SOLUTIONS[id];
@@ -64,6 +77,15 @@ describe("T-ROOM-SOLVE — World 2 (Growth) rooms are solvable", () => {
       if (sol.length <= 1) return; // a 1-move solve has no "before".
       const beforeLast = replay(buildState(level), sol.slice(0, -1));
       expect(beforeLast.status).not.toBe("won");
+    });
+  }
+
+  // F5 load-bearing guard: the grow-required room is UNSOLVABLE with no fruit (the
+  // body cannot reach across its 2-cell gap at starting length) — growth is required.
+  for (const id of GROW_REQUIRED) {
+    it(`${id} is UNSOLVABLE with all fruit removed (growth is load-bearing)`, () => {
+      const { level } = lookup(id);
+      expect(bfsSolve(buildState(withoutFruit(level)), ["move", "strike"])).toBeNull();
     });
   }
 

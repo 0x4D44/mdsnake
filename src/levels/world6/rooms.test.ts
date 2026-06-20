@@ -3,12 +3,12 @@
 // reaches `status === 'won'` in exactly the room's par. World 6 introduces swallow &
 // carry + deposit (and the shed-skin decoy as structure); the carry mechanic is
 // LOAD-BEARING — an extra guard removes the block and asserts the room is unsolvable
-// without it.
+// without it. The BFS solver is the shared ../bfs helper (move+strike+deposit set).
 
 import { describe, expect, it } from "vitest";
-import { buildState, deposit, DIRS, move, strike } from "../../core/game";
+import { buildState } from "../../core/game";
 import { replay } from "../replay";
-import type { Solution } from "../replay";
+import { bfsSolve } from "../bfs";
 import { SOLUTIONS } from "../solutions";
 import { WORLDS } from "../worlds";
 import type { GameState, LevelDef } from "../../core/types";
@@ -20,6 +20,10 @@ function lookup(id: string): { level: LevelDef; par: number } {
   return room;
 }
 
+// World 6's carry depth: pars run to ~8 moves; 12 leaves headroom.
+const W6 = ["move", "strike", "deposit"] as const;
+const solve = (s: GameState) => bfsSolve(s, [...W6], 12);
+
 /** A built state with every swallowable `object` block removed, isolating "can the
  *  room be solved WITHOUT the carry mechanic". If unsolvable, the block is
  *  load-bearing. */
@@ -28,47 +32,6 @@ function withoutBlocks(level: LevelDef): GameState {
   const cells = new Map(s.cells);
   for (const [k, e] of s.cells) if (e.pickup === true) cells.delete(k);
   return { ...s, cells };
-}
-
-/** Exhaustive BFS over move+strike+deposit. Returns the shortest winning solution,
- *  or null. The state key includes head/body, carry presence, and deposited blocks
- *  so carry/deposit states are distinguished. */
-function bfsSolve(start: GameState, maxDepth = 12): Solution | null {
-  if (start.status === "won") return [];
-  if (start.status === "dead") return null;
-  const stateKey = (s: GameState) =>
-    s.status +
-    "|" +
-    s.snake.map((p) => `${p.x},${p.y}${p.carry ? "*" : ""}`).join(";") +
-    "|" +
-    [...s.cells.entries()].filter(([, e]) => e.pickup).map(([k]) => k).sort().join(",");
-  const verbs: { input: Solution[number]; fn: (s: GameState) => GameState }[] = [];
-  for (const dn of ["up", "down", "left", "right"] as const) {
-    verbs.push({ input: { verb: "move", dir: dn }, fn: (s) => move(s, DIRS[dn]) });
-    verbs.push({ input: { verb: "strike", dir: dn }, fn: (s) => strike(s, DIRS[dn]) });
-    verbs.push({ input: { verb: "deposit", dir: dn }, fn: (s) => deposit(s, DIRS[dn]) });
-  }
-  const seen = new Set<string>([stateKey(start)]);
-  let frontier: { s: GameState; path: Solution }[] = [{ s: start, path: [] }];
-  for (let d = 0; d < maxDepth; d++) {
-    const next: { s: GameState; path: Solution }[] = [];
-    for (const node of frontier) {
-      for (const { input, fn } of verbs) {
-        const ns = fn(node.s);
-        if (ns === node.s) continue;
-        const path = [...node.path, input];
-        if (ns.status === "won") return path;
-        if (ns.status === "dead") continue;
-        const kk = stateKey(ns);
-        if (seen.has(kk)) continue;
-        seen.add(kk);
-        next.push({ s: ns, path });
-      }
-    }
-    frontier = next;
-    if (!frontier.length) break;
-  }
-  return null;
 }
 
 describe("T-ROOM-SOLVE — World 6 (The Gullet) rooms are solvable", () => {
@@ -81,7 +44,7 @@ describe("T-ROOM-SOLVE — World 6 (The Gullet) rooms are solvable", () => {
   for (const room of ROOMS) {
     const id = room.id;
     it(`${id} is solvable by BFS, and the BFS-shortest matches the recorded par`, () => {
-      const sol = bfsSolve(buildState(lookup(id).level));
+      const sol = solve(buildState(lookup(id).level));
       expect(sol).not.toBeNull();
       // The recorded par IS the shortest solution (honest, BFS-verified par).
       expect(sol!.length).toBe(lookup(id).par);
@@ -104,7 +67,7 @@ describe("T-ROOM-SOLVE — World 6 (The Gullet) rooms are solvable", () => {
     });
 
     it(`${id} is UNSOLVABLE without the swallowable block (carry is load-bearing)`, () => {
-      expect(bfsSolve(withoutBlocks(lookup(id).level))).toBeNull();
+      expect(solve(withoutBlocks(lookup(id).level))).toBeNull();
     });
   }
 });

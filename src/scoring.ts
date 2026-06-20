@@ -13,7 +13,7 @@
 // exactly the task's preferred path. (Authors place a visible fruit at `eggAt` as
 // the on-board lure; eating it is incidental — collection is purely positional.)
 
-import type { GameState, Vec } from "./core/types";
+import type { GameState, Segment, Vec } from "./core/types";
 import type { Constraint, RoomMeta } from "./levels/worlds";
 import type { LoggedAction } from "./levels/replay";
 
@@ -32,18 +32,31 @@ export function solved(trace: GameState[]): boolean {
   return trace.length > 0 && trace[trace.length - 1].status === "won";
 }
 
-/** Was the hidden-egg cell `at` occupied by ANY snake segment in ANY trace state?
- *  A run that routes through the cell collects it; one that avoids it does not
- *  (T-EGG-HIDDEN). Purely positional — independent of whether the cell was a fruit. */
-export function touchedHidden(trace: GameState[], at: Vec | undefined): boolean {
-  if (at === undefined) return false;
-  return trace.some((s) => s.snake.some((seg) => seg.x === at.x && seg.y === at.y));
+/** All bodies present in a co-op state: the active snake plus any other bodies
+ *  (Inc 4b / World 7). A single-snake state has `bodies` absent, so this is just
+ *  `[snake]` there — the kernel's `allBodies = [snake, ...(bodies ?? [])]`. */
+function allBodies(s: GameState): Segment[][] {
+  return [s.snake, ...(s.bodies ?? [])];
 }
 
-/** The longest the snake ever got during the run (for the `maxLength` constraint). */
+/** Was the hidden-egg cell `at` occupied by ANY segment of ANY body in ANY trace
+ *  state? In a co-op room a NON-active body touching the cell collects the egg too
+ *  (F2). A run that routes any body through the cell collects it; one that avoids it
+ *  does not (T-EGG-HIDDEN). Purely positional — independent of whether the cell was
+ *  a fruit. */
+export function touchedHidden(trace: GameState[], at: Vec | undefined): boolean {
+  if (at === undefined) return false;
+  return trace.some((s) =>
+    allBodies(s).some((body) => body.some((seg) => seg.x === at.x && seg.y === at.y)),
+  );
+}
+
+/** Peak length for the `maxLength` constraint: the max length of any SINGLE body
+ *  across the whole run (over the active snake AND every co-op body). The constraint
+ *  bounds how long any one body grew, not the combined segment count. */
 function peakLength(trace: GameState[]): number {
   let peak = 0;
-  for (const s of trace) peak = Math.max(peak, s.snake.length);
+  for (const s of trace) for (const body of allBodies(s)) peak = Math.max(peak, body.length);
   return peak;
 }
 

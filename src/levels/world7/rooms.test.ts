@@ -7,64 +7,19 @@
 // point of the world, not decoration.
 //
 // Honest par: each room's `par` (in worlds.ts) is the BFS-shortest solution over
-// move + strike + switch, and equals the recorded solution length.
+// move + strike + switch, and equals the recorded solution length. The BFS solver
+// is the shared ../bfs helper (restricting the verb set is exactly the "is Tab
+// load-bearing" probe).
 
 import { describe, expect, it } from "vitest";
-import { DIRS, move, strike, switchBody } from "../../core/game";
 import { replay } from "../replay";
 import type { Solution } from "../replay";
+import { bfsSolve } from "../bfs";
 import { SOLUTIONS } from "../solutions";
 import { buildRoom, WORLDS } from "../worlds";
 import type { RoomMeta } from "../worlds";
-import type { GameState } from "../../core/types";
 
 const ROOMS: RoomMeta[] = WORLDS.find((w) => w.id === "w7")!.rooms;
-
-type Step = { verb: "move" | "strike" | "switch"; dir?: "up" | "down" | "left" | "right" };
-function apply(s: GameState, i: Step): GameState {
-  if (i.verb === "switch") return switchBody(s);
-  return (i.verb === "move" ? move : strike)(s, DIRS[i.dir!]);
-}
-
-const stateKey = (s: GameState) =>
-  s.status +
-  "|" +
-  s.snake.map((p) => `${p.x},${p.y}`).join(";") +
-  "|" +
-  (s.bodies ?? []).map((b) => b.map((p) => `${p.x},${p.y}`).join(";")).join("/");
-
-/** Exhaustive BFS over move+strike (+switch when allowed). Returns the shortest
- *  winning solution, or null. With `useSwitch=false` only the active body can move,
- *  which is the "is Tab load-bearing" probe. */
-function bfsSolve(start: GameState, useSwitch: boolean, maxDepth = 24): Step[] | null {
-  if (start.status === "won") return [];
-  if (start.status === "dead") return null;
-  const verbs: Step[] = [];
-  for (const verb of ["move", "strike"] as const)
-    for (const dir of ["up", "down", "left", "right"] as const) verbs.push({ verb, dir });
-  if (useSwitch) verbs.push({ verb: "switch" });
-  const seen = new Set<string>([stateKey(start)]);
-  let frontier: { s: GameState; path: Step[] }[] = [{ s: start, path: [] }];
-  for (let d = 0; d < maxDepth; d++) {
-    const next: { s: GameState; path: Step[] }[] = [];
-    for (const node of frontier) {
-      for (const v of verbs) {
-        const ns = apply(node.s, v);
-        if (ns === node.s) continue;
-        const path = [...node.path, v];
-        if (ns.status === "won") return path;
-        if (ns.status === "dead") continue;
-        const kk = stateKey(ns);
-        if (seen.has(kk)) continue;
-        seen.add(kk);
-        next.push({ s: ns, path });
-      }
-    }
-    frontier = next;
-    if (!frontier.length) break;
-  }
-  return null;
-}
 
 describe("T-ROOM-SOLVE — World 7 (Two Bodies) co-op rooms are solvable", () => {
   it("every World-7 room has a recorded solution", () => {
@@ -104,7 +59,7 @@ describe("T-ROOM-SOLVE — World 7 (Two Bodies) co-op rooms are solvable", () =>
     });
 
     it(`${id} is solvable by BFS, and the BFS-shortest matches the recorded par`, () => {
-      const sol = bfsSolve(buildRoom(room), true);
+      const sol = bfsSolve(buildRoom(room), ["move", "strike", "switch"]);
       expect(sol).not.toBeNull();
       expect(sol!.length).toBe(room.par);
     });
@@ -114,7 +69,7 @@ describe("T-ROOM-SOLVE — World 7 (Two Bodies) co-op rooms are solvable", () =>
     });
 
     it(`${id} is UNSOLVABLE without Tab (co-op switching is load-bearing)`, () => {
-      expect(bfsSolve(buildRoom(room), false)).toBeNull();
+      expect(bfsSolve(buildRoom(room), ["move", "strike"])).toBeNull();
     });
   }
 });

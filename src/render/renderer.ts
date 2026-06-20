@@ -1,6 +1,13 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+import { allBodies } from "../core/game";
 import type { EntityKind, GameState, LevelDef, Vec } from "../core/types";
+import { drawItems } from "./draw";
+
+/** The tan of a swallowable `object` and of the carried-block nib — they are the
+ *  same material (a swallowed block is a carried object), so the colour lives in
+ *  ONE constant referenced by both `COLORS.carry` and `KIND_STYLE.object`. */
+const TAN = 0xc8a064;
 
 const COLORS = {
   bg: 0x10141c,
@@ -11,9 +18,14 @@ const COLORS = {
   anchored: 0xff8800,
   /** A carried (swallowed) block, drawn as a small nib on the carrying segment so
    *  the player can see the gut is full (Inc 4 / World 6, §2.2.8). */
-  carry: 0xc8a064,
+  carry: TAN,
   /** The hidden-egg marker (scoring-only, §2.7) — a pale gold orb on its cell. */
   egg: 0xffe08a,
+  /** A co-op (non-active) body's head and body: a dimmed/desaturated palette so
+   *  the inactive snakes read as present-but-backgrounded against the bright
+   *  active body (§2.2.10). The active head stays the camera/dark-radius anchor. */
+  otherHead: 0xbfa94a,
+  otherBody: 0x4f6b3c,
 };
 
 /** Per-kind visual choice. The renderer reads the entity's `kind` (rules read
@@ -40,7 +52,7 @@ const KIND_STYLE: Record<EntityKind, { color: number; shape: "box" | "sphere"; s
   // that reads as a discrete object you can swallow and re-deposit as a step or a
   // plate/gate holder (the decoy, §2.2.8/§2.2.9). Slightly under-scale so a
   // deposited block sits visibly within its cell.
-  object: { color: 0xc8a064, shape: "box", scale: 0.85 },
+  object: { color: TAN, shape: "box", scale: 0.85 },
 };
 const FALLBACK_STYLE = KIND_STYLE.wall;
 
@@ -199,7 +211,9 @@ export class Renderer {
   render(state: GameState) {
     this.clearGroup();
 
-    const head = state.snake[0];
+    // The active head (allBodies[0][0] === state.snake[0]) stays the camera /
+    // dark-radius anchor even when co-op bodies are present (§2.2.10).
+    const head = allBodies(state)[0][0];
     // In the dark, a cell is LIT iff it is a heat source OR within the head's small
     // lit radius. Everything else is dimmed to a faint ghost (heat-sense, §2.2.7).
     // `heat` is read ONLY here — never by the core (CORE-REGRESSION-HEAT).
@@ -209,8 +223,14 @@ export class Renderer {
       return Math.hypot(dx, dy) <= DARK_HEAD_RADIUS;
     };
 
-    for (const [k, e] of state.cells) {
-      const [x, y] = k.split(",").map(Number);
+    // The pure projection drives the mesh build: every cell + every segment of
+    // EVERY body (active and co-op). It is emitted cells-first, segments-last, so
+    // splitting it preserves the old draw order (cells, then egg, then snakes).
+    const items = drawItems(state);
+
+    for (const item of items) {
+      if (item.type !== "cell") continue;
+      const { x, y, entity: e } = item;
       const style = KIND_STYLE[e.kind] ?? FALLBACK_STYLE;
       // Dark dim: faint everywhere except heat + the head's radius.
       const dim = this.dark && !litInDark(x, y, e) ? DARK_DIM_OPACITY : undefined;
@@ -232,23 +252,34 @@ export class Renderer {
     }
 
     // The hidden-egg marker (scoring-only, §2.7): a pale orb floating on its cell.
-    // Drawn UNDER the snake so a segment occupying it (collecting it) reads on top.
+    // Drawn UNDER the snakes so a segment occupying it (collecting it) reads on top.
     // In the dark it dims with everything else unless within the head's radius.
     if (this.eggAt) {
       const dim = this.dark && !litInDark(this.eggAt.x, this.eggAt.y, {}) ? DARK_DIM_OPACITY : undefined;
       this.add(this.eggAt.x, this.eggAt.y, COLORS.egg, "sphere", 0.45, { opacity: dim });
     }
 
-    state.snake.forEach((seg, i) => {
-      // An anchored segment gets the hot accent (it is the one gripping the
-      // wall); otherwise head vs body colouring as before.
-      const color = seg.anchored ? COLORS.anchored : i === 0 ? COLORS.head : COLORS.body;
-      this.add(seg.x, seg.y, color, "box", 0.85);
+    // Every segment of every body. The active body keeps the bright head/body
+    // palette (anchored segments take the hot accent); co-op bodies get the
+    // dimmed/desaturated palette with each head still marked (§2.2.10).
+    for (const item of items) {
+      if (item.type !== "segment") continue;
+      const { x, y, role, head: isHead, seg } = item;
+      const color = seg.anchored
+        ? COLORS.anchored
+        : role === "other"
+          ? isHead
+            ? COLORS.otherHead
+            : COLORS.otherBody
+          : isHead
+            ? COLORS.head
+            : COLORS.body;
+      this.add(x, y, color, "box", 0.85);
       // A carried (swallowed) block rides on its segment — draw a small nib on top
       // so a full gut is visible (Inc 4 / World 6, §2.2.8).
       if (seg.carry !== undefined) {
         this.add(seg.x, seg.y + 0.55, COLORS.carry, "box", 0.35);
       }
-    });
+    }
   }
 }
