@@ -21,8 +21,25 @@ const KIND_STYLE: Record<EntityKind, { color: number; shape: "box" | "sphere"; s
   // A grip wall: a distinct ridged blue so grippable surfaces read apart from
   // plain walls (Inc 2 / World 3).
   anchor: { color: 0x4477cc, shape: "box", scale: 1 },
+  // A pressure plate: a flat amber pad you stand ON (Inc 3 / World 4). Low and
+  // wide so it reads as a floor button, not a block.
+  plate: { color: 0xddaa33, shape: "box", scale: 0.95 },
+  // A gate: a violet block. When OPEN its solidity is derived false; the renderer
+  // dims it to a thin ghost so the player can see the gap is passable (see render).
+  gate: { color: 0x9955dd, shape: "box", scale: 1 },
+  // A heat lamp (Inc 3 / World 5 "Dark"): a warm glowing sphere. In the dark it is
+  // one of the few things that stays lit (it is a HEAT source), so the player uses
+  // lamps as landmarks for the geometry they memorised while lit.
+  heatlamp: { color: 0xffaa33, shape: "sphere", scale: 0.55 },
 };
 const FALLBACK_STYLE = KIND_STYLE.wall;
+
+/** In a DARK room (§2.2.7), how many cells around the head stay lit. Everything
+ *  else that is neither a heat source nor the snake is dimmed to a faint hint. */
+const DARK_HEAD_RADIUS = 1.5;
+/** Opacity a non-lit cell is dimmed to in the dark (a faint ghost, not invisible —
+ *  the geometry is "remembered", barely sensed, never crisply seen). */
+const DARK_DIM_OPACITY = 0.08;
 
 /**
  * Minimal presentation layer. Reads a GameState and draws boxes/spheres; holds
@@ -39,6 +56,11 @@ export class Renderer {
   private gl: THREE.WebGLRenderer;
   private controls: OrbitControls;
   private group = new THREE.Group();
+  private ambient: THREE.AmbientLight;
+  private sun: THREE.DirectionalLight;
+  /** Whether the CURRENT room is dark (heat-sense mode, §2.2.7). Set per room in
+   *  `onRoomLoad`; the core never knows about this — it is pure presentation. */
+  private dark = false;
 
   constructor(private container: HTMLElement) {
     this.scene.background = new THREE.Color(COLORS.bg);
@@ -55,10 +77,10 @@ export class Renderer {
     this.controls.target.set(6, 2, 0);
     this.controls.enableDamping = true;
 
-    this.scene.add(new THREE.AmbientLight(0xffffff, 0.6));
-    const sun = new THREE.DirectionalLight(0xffffff, 0.85);
-    sun.position.set(6, 12, 8);
-    this.scene.add(sun, this.group);
+    this.ambient = new THREE.AmbientLight(0xffffff, 0.6);
+    this.sun = new THREE.DirectionalLight(0xffffff, 0.85);
+    this.sun.position.set(6, 12, 8);
+    this.scene.add(this.ambient, this.sun, this.group);
 
     window.addEventListener("resize", () => this.onResize());
     const loop = () => {
@@ -85,7 +107,14 @@ export class Renderer {
    * frame. Re-centres `controls.target` and pulls the camera back to fit the
    * room's extent (HLD §2.8 camera auto-fit).
    */
-  onRoomLoad(_state: GameState, level: LevelDef) {
+  onRoomLoad(_state: GameState, level: LevelDef, dark = false) {
+    // Dark mode (§2.2.7) is RENDERER-ONLY: dim the scene's global lights so only
+    // heat sources, the snake, and the head's small lit radius stand out (the
+    // per-cell dimming happens in `render`). The core is unchanged.
+    this.dark = dark;
+    this.ambient.intensity = dark ? 0.12 : 0.6;
+    this.sun.intensity = dark ? 0.15 : 0.85;
+
     let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
     const include = (x: number, y: number) => {
       minX = Math.min(minX, x);
@@ -128,23 +157,62 @@ export class Renderer {
     this.group.clear();
   }
 
-  private add(x: number, y: number, color: number, shape: "box" | "sphere", scale: number) {
+  private add(
+    x: number,
+    y: number,
+    color: number,
+    shape: "box" | "sphere",
+    scale: number,
+    opts: { height?: number; opacity?: number } = {},
+  ) {
+    const height = opts.height ?? scale;
     const geom =
       shape === "sphere"
         ? new THREE.SphereGeometry(scale / 2, 18, 18)
-        : new THREE.BoxGeometry(scale, scale, scale);
-    const m = new THREE.Mesh(geom, new THREE.MeshStandardMaterial({ color }));
-    m.position.set(x, y, 0);
+        : new THREE.BoxGeometry(scale, height, scale);
+    const transparent = opts.opacity !== undefined && opts.opacity < 1;
+    const m = new THREE.Mesh(
+      geom,
+      new THREE.MeshStandardMaterial({ color, transparent, opacity: opts.opacity ?? 1 }),
+    );
+    // A flat plate sits low in its cell; everything else is centred.
+    m.position.set(x, shape === "box" && height < scale ? y - (scale - height) / 2 : y, 0);
     this.group.add(m);
   }
 
   render(state: GameState) {
     this.clearGroup();
 
+    const head = state.snake[0];
+    // In the dark, a cell is LIT iff it is a heat source OR within the head's small
+    // lit radius. Everything else is dimmed to a faint ghost (heat-sense, §2.2.7).
+    // `heat` is read ONLY here — never by the core (CORE-REGRESSION-HEAT).
+    const litInDark = (x: number, y: number, e: { heat?: boolean }): boolean => {
+      if (e.heat === true) return true;
+      const dx = x - head.x, dy = y - head.y;
+      return Math.hypot(dx, dy) <= DARK_HEAD_RADIUS;
+    };
+
     for (const [k, e] of state.cells) {
       const [x, y] = k.split(",").map(Number);
       const style = KIND_STYLE[e.kind] ?? FALLBACK_STYLE;
-      this.add(x, y, style.color, style.shape, style.scale);
+      // Dark dim: faint everywhere except heat + the head's radius.
+      const dim = this.dark && !litInDark(x, y, e) ? DARK_DIM_OPACITY : undefined;
+      if (e.kind === "plate") {
+        // A flat pad: low box so the snake visibly stands on top of it.
+        this.add(x, y, style.color, "box", style.scale, { height: 0.2, opacity: dim });
+      } else if (e.kind === "gate") {
+        // OPEN (derived solid:false) -> a thin ghost so the gap reads passable;
+        // CLOSED -> the full violet block. In the dark an unlit gate is dimmed
+        // further still (take the smaller opacity).
+        if (e.solid === false) {
+          this.add(x, y, style.color, "box", style.scale, { height: 0.15, opacity: Math.min(0.35, dim ?? 1) });
+        } else {
+          this.add(x, y, style.color, style.shape, style.scale, { opacity: dim });
+        }
+      } else {
+        this.add(x, y, style.color, style.shape, style.scale, { opacity: dim });
+      }
     }
 
     state.snake.forEach((seg, i) => {

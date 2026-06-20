@@ -50,7 +50,9 @@ function loadRoom(index: number) {
   history = [];
   inputs = [];
   state = buildState(room().level);
-  renderer.onRoomLoad(state, room().level);
+  // World 5 "Dark" rooms render in heat-sense mode (renderer-only; the core is
+  // unchanged — §2.2.7). `dark` is a presentation flag on the room metadata.
+  renderer.onRoomLoad(state, room().level, room().dark === true);
   render();
 }
 
@@ -65,13 +67,29 @@ function statusLine(): string {
   return "Reach the green exit.";
 }
 
+/** A one-line, optional teaching hint per world (HUD only; the rooms still teach
+ *  unaided per D24). Empty for worlds whose mechanic is self-evident. */
+function worldHint(worldId: string): string {
+  switch (worldId) {
+    case "w3":
+      return "Stand beside a blue grip wall and press A to anchor, then climb.";
+    case "w4":
+      return "Stand on an amber plate to open its matching gate; a body in the gate holds it open.";
+    default:
+      return "";
+  }
+}
+
 function render() {
   renderer.render(state);
   const { world, roomNo } = worldOf(roomIndex);
+  const hint = worldHint(world.id);
   hud.innerHTML =
     `<b>COIL</b> &nbsp;·&nbsp; ${world.name} &nbsp;—&nbsp; Room ${roomNo} &nbsp;` +
     `<span class="sub">(${room().id})</span><br>` +
-    `${statusLine()}<br><br>` +
+    `${statusLine()}<br>` +
+    (hint ? `<span class="sub">${hint}</span><br>` : "") +
+    `<br>` +
     `<span class="sub">Arrows: move &nbsp;·&nbsp; Shift+Arrow: strike &nbsp;·&nbsp; A: anchor<br>` +
     `U: undo &nbsp;·&nbsp; R: restart &nbsp;·&nbsp; N: next &nbsp;·&nbsp; drag: orbit<br>` +
     `len ${state.snake.length} &nbsp;·&nbsp; moves ${inputs.length}</span>`;

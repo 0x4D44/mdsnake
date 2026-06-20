@@ -9,7 +9,7 @@
 
 import { describe, expect, it } from "vitest";
 import { parseRoom } from "./ascii";
-import { buildState } from "./game";
+import { buildState, DIRS, move } from "./game";
 
 describe("parseRoom — well-formed room", () => {
   it("parses glyphs and an ordered head-first snake to the exact LevelDef", () => {
@@ -102,8 +102,7 @@ describe("parseRoom — legend block", () => {
 
   it("assigns DISTINCT legend glyphs to the right cells (two-pair shape, Inc-1 presets)", () => {
     // Inc-1 stand-in for the Inc-3 two-pair Pressure case: two distinct legend
-    // glyphs land on the correct, distinct cells. When plate/gate presets exist
-    // (Inc 3) these become trigger:g1/door:g1 vs trigger:g2/door:g2.
+    // glyphs land on the correct, distinct cells.
     const def = parseRoom({
       name: "t",
       strikeRange: 3,
@@ -113,6 +112,70 @@ describe("parseRoom — legend block", () => {
     });
     expect(def.cells).toContainEqual({ x: 2, y: 1, type: "fruit" });
     expect(def.cells).toContainEqual({ x: 4, y: 1, type: "exit" });
+  });
+
+  it("T-ASCII two-pair Pressure room: plate/gate glyphs parse to DISTINCT ids (g1/g2)", () => {
+    // The real Inc-3 case: two plate/gate PAIRS via id-bearing legend entries.
+    //   P/Q are plates with trigger ids g1/g2; A/B are gates with door ids g1/g2.
+    const def = parseRoom({
+      name: "t",
+      strikeRange: 3,
+      floorY: 0,
+      rows: [
+        "0PAQB",
+        "#####",
+      ],
+      legend: {
+        P: { type: "plate", trigger: "g1" },
+        Q: { type: "plate", trigger: "g2" },
+        A: { type: "gate", door: "g1" },
+        B: { type: "gate", door: "g2" },
+      },
+    });
+    // Each glyph lands on its correct, distinct cell with its OWN id — g1 cells
+    // carry trigger/door "g1", g2 cells "g2", and the ids never cross-contaminate.
+    expect(def.cells).toContainEqual({ x: 1, y: 1, type: "plate", trigger: "g1" });
+    expect(def.cells).toContainEqual({ x: 2, y: 1, type: "gate", door: "g1" });
+    expect(def.cells).toContainEqual({ x: 3, y: 1, type: "plate", trigger: "g2" });
+    expect(def.cells).toContainEqual({ x: 4, y: 1, type: "gate", door: "g2" });
+    // A plate glyph carries NO door id and vice-versa (no cross field).
+    const p1 = def.cells.find((c) => c.x === 1)!;
+    expect(p1.door).toBeUndefined();
+    const a1 = def.cells.find((c) => c.x === 2)!;
+    expect(a1.trigger).toBeUndefined();
+  });
+
+  it("a parsed Pressure room: stepping the head onto a plate opens its gate", () => {
+    // Head '0' starts beside plate P (g1); gate A (g1) is two cells past it. Both
+    // gates start CLOSED (no plate pressed). One step right puts the head on P and
+    // opens A; B (g2, untouched) stays shut. Proves the parser's ids drive the
+    // live mechanism end-to-end.
+    const s = buildState(
+      parseRoom({
+        name: "t",
+        strikeRange: 3,
+        floorY: 0,
+        rows: [
+          "0PA.QB",
+          "######",
+        ],
+        legend: {
+          P: { type: "plate", trigger: "g1" },
+          Q: { type: "plate", trigger: "g2" },
+          A: { type: "gate", door: "g1" },
+          B: { type: "gate", door: "g2" },
+        },
+      }),
+    );
+    // At build: head at (0,1), not on any plate -> both gates closed.
+    expect(s.cells.get("2,1")?.solid).toBe(true); // gate A (g1)
+    expect(s.cells.get("5,1")?.solid).toBe(true); // gate B (g2)
+    // Step right onto plate P (1,1) -> gate A opens; B unaffected.
+    const n = move(s, DIRS.right);
+    expect(n.snake[0]).toEqual({ x: 1, y: 1 });
+    expect(n.triggers?.has("g1")).toBe(true);
+    expect(n.cells.get("2,1")?.solid).toBe(false); // gate A now open
+    expect(n.cells.get("5,1")?.solid).toBe(true); //  gate B still shut
   });
 });
 

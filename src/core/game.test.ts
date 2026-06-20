@@ -178,13 +178,39 @@ describe("buildState (T-BUILD)", () => {
     expect(s.snake[0]).toEqual({ x: 1, y: 1 });
   });
 
-  it("INC-1 LIMITATION: a head RESTING on the exit at build does NOT win", () => {
-    // Documented pre-refactor behaviour: buildState only wins if the snake FALLS
-    // onto the exit (checkWin runs only inside settle's fall loop). A snake that
-    // starts already supported ON the exit stays 'play' — there is no post-settle
-    // checkEnd until Inc 3 (HLD §4.3 F10). Pinned so the refactor preserves it.
+  it("INC-3 (F10): a segment starting on a plate builds with its gate OPEN", () => {
+    // buildState runs the full resolve tail (settle -> applyMechanisms -> checkEnd),
+    // so a snake authored ON a plate presses it at build time and its gate is
+    // already non-solid — matching in-play behaviour, not a one-turn-late open.
+    const s = buildState(
+      lvl({
+        snake: [{ x: 1, y: 1 }, { x: 0, y: 1 }],
+        cells: [...floor(0, 0, 6), { x: 1, y: 1, type: "plate", trigger: "g1" }, { x: 4, y: 1, type: "gate", door: "g1" }],
+      }),
+    );
+    expect(s.cells.get("4,1")?.solid).toBe(false);
+    expect(s.triggers?.has("g1")).toBe(true);
+  });
+
+  it("INC-3 (F10): a gate with no plate pressed and an empty mouth builds CLOSED", () => {
+    const s = buildState(
+      lvl({
+        snake: [{ x: 6, y: 1 }, { x: 5, y: 1 }],
+        cells: [...floor(0, 0, 6), { x: 1, y: 1, type: "plate", trigger: "g1" }, { x: 3, y: 1, type: "gate", door: "g1" }],
+      }),
+    );
+    expect(s.cells.get("3,1")?.solid).toBe(true);
+  });
+
+  it("INC-3 (F10): a head RESTING on the exit at build now wins", () => {
+    // INTENDED rule change at Inc 3 (HLD §4.3 F10/G7): buildState routes through
+    // the FULL resolve tail (`settle -> applyMechanisms -> checkEnd`), so a snake
+    // authored already supported ON the exit builds `won` — checkEnd fires after
+    // the settle no-op. (Pre-Inc3 this stayed 'play' because there was no
+    // post-settle checkEnd; that Inc-1 limitation is now lifted.)
     const s = buildState(lvl({ snake: [{ x: 1, y: 1 }], cells: [wall(1, 0), exit(1, 1)] }));
-    expect(s.status).toBe("play");
+    expect(s.status).toBe("won");
+    expect(s.snake[0]).toEqual({ x: 1, y: 1 });
   });
 });
 

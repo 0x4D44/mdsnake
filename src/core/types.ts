@@ -52,13 +52,28 @@ export interface Entity {
   win?: boolean;
   /** A surface a segment may anchor on (Inc 2 / World 3). */
   grip?: boolean;
+  /** A pressure plate: while ANY snake segment sits on it, its mechanism id is
+   *  pressed (Inc 3 / World 4). Non-solid, non-support — you stand ON it. The
+   *  id is per-cell, so it is set as an OVERRIDE on the `plate` preset, never in
+   *  the frozen preset row itself. */
+  trigger?: string;
+  /** A gate: a solid whose solidity is DERIVED each turn by `applyMechanisms`
+   *  from whether its `door` id is pressed OR its cell is occupied (Inc 3 /
+   *  World 4). M1: a gate NEVER sets `supports` (its solidity is derived, so it
+   *  can never be a grounding source — §2.1/§2.2.6). The id is per-cell, set as
+   *  an OVERRIDE on the `gate` preset. */
+  door?: string;
+  /** A heat source: visible in the dark (Inc 3 / World 5). RENDERER-ONLY — the
+   *  core never reads this flag, so a `heat` cell is byte-inert to every rule
+   *  (collision/gravity/win). Pinned by CORE-REGRESSION-HEAT (§4.3): a known room
+   *  solves identically with heat cells sprinkled in vs without (§2.2.7). */
+  heat?: boolean;
   // --- added only when its world arrives (the §2.3 "no on-ramps" ledger) ---
-  // heat / trigger / door / pickup / egg are deliberately ABSENT until the
-  // increment that uses them.
+  // pickup / egg are deliberately ABSENT until the increment that uses them.
 }
 
 /** The preset keys. Grows with each increment that adds an entity. */
-export type EntityKind = "wall" | "fruit" | "exit" | "anchor";
+export type EntityKind = "wall" | "fruit" | "exit" | "anchor" | "plate" | "gate" | "heatlamp";
 
 /**
  * Back-compat alias: level data authors a cell by its preset NAME, which is an
@@ -84,6 +99,22 @@ export const PRESETS: Readonly<Record<EntityKind, Entity>> = Object.freeze({
   // support like any wall, but additionally `grip:true` so a segment ON it may be
   // anchored (an anchored-on-grip segment grounds the snake, §2.5/D25).
   anchor: Object.freeze<Entity>({ kind: "anchor", solid: true, supports: true, grip: true }),
+  // Inc 3 / World 4 "Pressure": a pressure plate. Non-solid (you stand ON it),
+  // non-support (it does not bear weight from below — you rest on the floor under
+  // it). Its `trigger` id is set PER CELL as an override; the frozen row carries
+  // an empty id placeholder so the shape is complete.
+  plate: Object.freeze<Entity>({ kind: "plate", trigger: "" }),
+  // Inc 3 / World 4: a gate. A solid whose solidity is DERIVED each turn by
+  // applyMechanisms. M1 (single-pass guard): it MUST NEVER set `supports`, so a
+  // gate state change can never alter the grounded set and settle never re-runs
+  // after the mechanism pass. `door` id is set PER CELL as an override.
+  gate: Object.freeze<Entity>({ kind: "gate", solid: true, door: "" }),
+  // Inc 3 / World 5 "Dark": a heat lamp. RENDERER-ONLY — `heat:true` and NOTHING
+  // else (no solid/support/eat/win), so the core is byte-inert to it: a heat cell
+  // never blocks a step, bears weight, grows the snake, or wins. The renderer dims
+  // everything except heat sources, the snake, and a small radius round the head;
+  // the dark puzzle is purely about remembering geometry you saw lit (§2.2.7).
+  heatlamp: Object.freeze<Entity>({ kind: "heatlamp", heat: true }),
 });
 
 export interface GameState {
@@ -97,6 +128,10 @@ export interface GameState {
   floorY: number;
   status: Status;
   name: string;
+  /** Mechanism ids currently pressed — recomputed from scratch every resolve by
+   *  `applyMechanisms` (no cross-turn latch, §2.2.6). ABSENT until the first
+   *  mechanism pass writes it; a level with no plates/gates never carries it. */
+  triggers?: Set<string>;
 }
 
 export interface LevelDef {
@@ -106,6 +141,9 @@ export interface LevelDef {
   /** Ordered, head first. (A `Vec[]` suffices for authoring; segment state is
    *  set at runtime, not in the static level.) */
   snake: Vec[];
-  /** Cells reference a preset BY NAME (`type`), never a raw entity literal. */
-  cells: { x: number; y: number; type: EntityKind }[];
+  /** Cells reference a preset BY NAME (`type`), never a raw entity literal. The
+   *  optional `trigger`/`door` are per-cell mechanism ids (Inc 3): a `plate`
+   *  carries a `trigger` id, a `gate` carries a `door` id, applied as an override
+   *  on top of the named preset by `buildState`. */
+  cells: { x: number; y: number; type: EntityKind; trigger?: string; door?: string }[];
 }

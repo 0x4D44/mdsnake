@@ -23,6 +23,17 @@ import { r2 as w3r2 } from "./world3/r2";
 import { r3 as w3r3 } from "./world3/r3";
 import { r4 as w3r4 } from "./world3/r4";
 import { r5 as w3r5 } from "./world3/r5";
+import { r1 as w4r1 } from "./world4/r1";
+import { r2 as w4r2 } from "./world4/r2";
+import { r3 as w4r3 } from "./world4/r3";
+import { r4 as w4r4 } from "./world4/r4";
+import { r5 as w4r5 } from "./world4/r5";
+import { r1 as w5r1 } from "./world5/r1";
+import { r2 as w5r2 } from "./world5/r2";
+import { r3 as w5r3 } from "./world5/r3";
+import { r4 as w5r4 } from "./world5/r4";
+import { r5 as w5r5 } from "./world5/r5";
+import { r6 as w5r6 } from "./world5/r6";
 
 /** An optional per-room scoring constraint (the "constraint egg", §2.7). It is a
  *  pure predicate over the recorded solve, evaluated OUTSIDE the core. Inc 1 only
@@ -46,6 +57,11 @@ export interface RoomMeta {
   constraint?: Constraint;
   /** Whether the room hides a collectible egg (a marked fruit en route). */
   hiddenEgg: boolean;
+  /** Whether the room is rendered DARK (Inc 3 / World 5 "Dark", §2.2.7). This is a
+   *  PRESENTATION flag ONLY — the renderer dims everything except heat sources, the
+   *  snake, and a small radius round the head. The sim core never reads it; rules
+   *  are byte-identical lit or dark (CORE-REGRESSION-HEAT). Absent === lit. */
+  dark?: boolean;
 }
 
 export interface World {
@@ -97,6 +113,40 @@ export const WORLDS: World[] = [
       { id: "w3r3", level: w3r3, par: 7, hiddenEgg: false },
       { id: "w3r4", level: w3r4, par: 7, hiddenEgg: false },
       { id: "w3r5", level: w3r5, par: 8, hiddenEgg: false },
+    ],
+  },
+  {
+    // World 4 "Pressure" — plate-opens-gate (§2.2.6). R1 teaches the mechanic
+    // (walk through), R2 bridges plate->gate with the body, R3 is the hold-then-
+    // strike-through timing twist, R4 introduces TWO distinct id-keyed pairs, and
+    // R5 is the grow + hold + thread capstone. Each gate is load-bearing.
+    id: "w4",
+    name: "Pressure",
+    rooms: [
+      { id: "w4r1", level: w4r1, par: 3, hiddenEgg: false },
+      { id: "w4r2", level: w4r2, par: 3, hiddenEgg: false },
+      { id: "w4r3", level: w4r3, par: 3, hiddenEgg: false },
+      { id: "w4r4", level: w4r4, par: 3, hiddenEgg: false },
+      { id: "w4r5", level: w4r5, par: 7, hiddenEgg: false, constraint: { label: "no waste", maxMoves: 7 } },
+    ],
+  },
+  {
+    // World 5 "Dark" — heat-sense (§2.2.7). Every room is rendered DARK (dim
+    // everything except heat lamps, the snake, and the head's small radius); the
+    // RULES are completely normal — Dark only changes what you can SEE, never how
+    // the snake behaves (renderer-only, ZERO core change; CORE-REGRESSION-HEAT).
+    // Heat lamps are landmarks: R1 a lit exit, R2 a beacon across a gap, R3 a lit
+    // fruit, R4 a lit drop, R5 lit stepping stones, R6 a chained capstone. The
+    // teaching is "memorise the lit geometry, then move through the black".
+    id: "w5",
+    name: "Dark",
+    rooms: [
+      { id: "w5r1", level: w5r1, par: 4, hiddenEgg: false, dark: true },
+      { id: "w5r2", level: w5r2, par: 2, hiddenEgg: false, dark: true },
+      { id: "w5r3", level: w5r3, par: 3, hiddenEgg: false, dark: true },
+      { id: "w5r4", level: w5r4, par: 2, hiddenEgg: false, dark: true },
+      { id: "w5r5", level: w5r5, par: 3, hiddenEgg: false, dark: true },
+      { id: "w5r6", level: w5r6, par: 3, hiddenEgg: false, dark: true },
     ],
   },
 ];

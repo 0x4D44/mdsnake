@@ -17,6 +17,8 @@ import type { CellType, Dir, Entity, EntityKind, GameState, LevelDef } from "./t
 
 const wall = (x: number, y: number) => ({ x, y, type: "wall" as CellType });
 const grip = (x: number, y: number) => ({ x, y, type: "anchor" as CellType });
+const plate = (x: number, y: number, id: string) => ({ x, y, type: "plate" as CellType, trigger: id });
+const gate = (x: number, y: number, id: string) => ({ x, y, type: "gate" as CellType, door: id });
 const floorRow = (y: number, x0: number, x1: number) => {
   const c = [];
   for (let x = x0; x <= x1; x++) c.push(wall(x, y));
@@ -187,6 +189,16 @@ const CORPUS: GameState[] = [
       cells: [...floorRow(0, 1, 6), grip(1, 1), grip(1, 2)],
     }),
   ),
+  // 14: Inc-3 mechanism state — the head sits on a plate 'g1' which holds open a
+  //     gate 'g1' two cells ahead. Exercises applyMechanisms in the resolve tail
+  //     under the battery (determinism, purity, no-op identity, undo) across the
+  //     verb set. The floor supports the snake, so it is at rest.
+  buildState(
+    lvl({
+      snake: [{ x: 1, y: 1 }, { x: 0, y: 1 }],
+      cells: [...floorRow(0, 0, 6), plate(1, 1, "g1"), gate(3, 1, "g1")],
+    }),
+  ),
 ];
 
 // Sanity: the corpus pins the terminal seeds we rely on.
@@ -196,10 +208,14 @@ describe("CORPUS-INC1", () => {
     expect(CORPUS.some((s) => s.status === "dead")).toBe(true);
   });
   it("has the documented size", () => {
-    expect(CORPUS.length).toBe(14);
+    expect(CORPUS.length).toBe(15);
   });
   it("includes a grip-cell state for the anchor verb", () => {
     expect(CORPUS.some((s) => [...s.cells.values()].some((e) => e.grip === true))).toBe(true);
+  });
+  it("includes a mechanism (plate + gate) state", () => {
+    expect(CORPUS.some((s) => [...s.cells.values()].some((e) => e.trigger !== undefined))).toBe(true);
+    expect(CORPUS.some((s) => [...s.cells.values()].some((e) => e.door !== undefined))).toBe(true);
   });
 });
 
@@ -313,9 +329,10 @@ describe("P-SETTLE-TERMINATION", () => {
 //     the (currently empty) set of derived-solidity kinds so the invariant is
 //     enforced the moment such a kind is added.
 
-// Kinds whose `solid` is recomputed each turn by a future applyMechanisms pass.
-// Empty at Inc 1; populated (e.g. "gate") when mechanisms land at Inc 3.
-const MECHANISM_DERIVED_SOLIDITY: EntityKind[] = [];
+// Kinds whose `solid` is recomputed each turn by the applyMechanisms pass. The
+// M1 single-pass guard requires each to have falsy `supports`. Inc 3 adds the
+// gate (its solidity is derived from triggers + occupancy each turn).
+const MECHANISM_DERIVED_SOLIDITY: EntityKind[] = ["gate"];
 
 describe("T-PRESETS", () => {
   const entries = Object.entries(PRESETS) as [EntityKind, Entity][];
@@ -342,6 +359,19 @@ describe("T-PRESETS", () => {
       // a thing you cannot walk through) — the converse need not hold.
       if (e.supports) {
         expect(e.solid, `${k}: supports implies solid`).toBeTruthy();
+      }
+      // heat is RENDERER-ONLY (§2.2.7): a heat preset must carry NO rule flag, so
+      // the core stays byte-inert to it (CORE-REGRESSION-HEAT). If a future cell
+      // ever needs to be both warm AND a rule entity, that pairing must be designed
+      // and oracle'd deliberately — this guard makes the silent case impossible.
+      if (e.heat) {
+        expect(e.solid, `${k}: heat must not be solid`).toBeFalsy();
+        expect(e.supports, `${k}: heat must not support`).toBeFalsy();
+        expect(e.eat, `${k}: heat must not be edible`).toBeFalsy();
+        expect(e.win, `${k}: heat must not be win`).toBeFalsy();
+        expect(e.grip, `${k}: heat must not grip`).toBeFalsy();
+        expect(e.trigger, `${k}: heat must not be a trigger`).toBeFalsy();
+        expect(e.door, `${k}: heat must not be a door`).toBeFalsy();
       }
     }
   });
