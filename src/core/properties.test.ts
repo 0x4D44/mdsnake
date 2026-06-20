@@ -9,13 +9,14 @@
 // a later red is unambiguously the refactor's fault.
 
 import { describe, expect, it } from "vitest";
-import { buildState, DIRS, key, move, settle, strike } from "./game";
+import { anchor, buildState, DIRS, key, move, settle, strike } from "./game";
 import { PRESETS } from "./types";
 import type { CellType, Dir, Entity, EntityKind, GameState, LevelDef } from "./types";
 
 // --- helpers ----------------------------------------------------------------
 
 const wall = (x: number, y: number) => ({ x, y, type: "wall" as CellType });
+const grip = (x: number, y: number) => ({ x, y, type: "anchor" as CellType });
 const floorRow = (y: number, x0: number, x1: number) => {
   const c = [];
   for (let x = x0; x <= x1; x++) c.push(wall(x, y));
@@ -44,6 +45,9 @@ function deepEqual(a: GameState, b: GameState): boolean {
   if (a.snake.length !== b.snake.length) return false;
   for (let i = 0; i < a.snake.length; i++) {
     if (a.snake[i].x !== b.snake[i].x || a.snake[i].y !== b.snake[i].y) return false;
+    // Per-segment state must match too (Inc 2: `anchored`), normalising the
+    // intent flag so undefined and false compare equal.
+    if (Boolean(a.snake[i].anchored) !== Boolean(b.snake[i].anchored)) return false;
   }
   if (a.cells.size !== b.cells.size) return false;
   for (const [k, v] of a.cells) {
@@ -63,6 +67,12 @@ interface VerbReg {
 const VERBS: VerbReg[] = [
   { name: "move", fn: move },
   { name: "strike", fn: strike },
+  // Inc 2: anchor is directionless (toggle); wrapped to ignore `dir` so the
+  // battery iterates it over the corpus exactly like the movement verbs. Its
+  // grip-cell behaviour is exercised by CORPUS state 13 (a snake beside a grip
+  // wall); on every other corpus state it must no-op (same ref) — covered by
+  // P-NOOP-IDENTITY.
+  { name: "anchor", fn: (s) => anchor(s) },
 ];
 const ALL_DIRS: { name: string; dir: Dir }[] = [
   { name: "up", dir: DIRS.up },
@@ -167,6 +177,16 @@ const CORPUS: GameState[] = [
   })(),
   // 12: already-dead terminal state (pinned regression: verbs must no-op).
   buildState(lvl({ snake: [{ x: 1, y: 5 }], cells: [] })), // falls into void -> dead
+  // 13: Inc-2 grip-cell state — a snake resting on a floor with a grip WALL
+  //     beside its head (so `anchor` has a grip surface in reach and performs a
+  //     real toggle, exercising the new verb's grip path under the battery). The
+  //     floor supports it, so it is at rest regardless of the anchor.
+  buildState(
+    lvl({
+      snake: [{ x: 2, y: 1 }, { x: 3, y: 1 }],
+      cells: [...floorRow(0, 1, 6), grip(1, 1), grip(1, 2)],
+    }),
+  ),
 ];
 
 // Sanity: the corpus pins the terminal seeds we rely on.
@@ -176,7 +196,10 @@ describe("CORPUS-INC1", () => {
     expect(CORPUS.some((s) => s.status === "dead")).toBe(true);
   });
   it("has the documented size", () => {
-    expect(CORPUS.length).toBe(13);
+    expect(CORPUS.length).toBe(14);
+  });
+  it("includes a grip-cell state for the anchor verb", () => {
+    expect(CORPUS.some((s) => [...s.cells.values()].some((e) => e.grip === true))).toBe(true);
   });
 });
 

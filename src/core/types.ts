@@ -10,6 +10,19 @@ export interface Vec {
 /** A movement direction is just a unit Vec. */
 export type Dir = Vec;
 
+/**
+ * A snake body cell. A superset of `Vec` (so cell/dir math is unchanged); the
+ * extra fields are per-segment body state added by the increment that needs them.
+ *   `anchored` (Inc 2): the player has gripped this segment. INTENT only — it is a
+ *   grounding source ONLY while the segment currently sits on a `grip` cell (D25,
+ *   derived each turn, no latch). The flag travels with the segment when it moves.
+ */
+export interface Segment {
+  x: number;
+  y: number;
+  anchored?: boolean;
+}
+
 export type Status = "play" | "won" | "dead";
 
 // --- Entity model -----------------------------------------------------------
@@ -37,13 +50,15 @@ export interface Entity {
   eat?: boolean;
   /** Head on it -> won (today: exit). */
   win?: boolean;
+  /** A surface a segment may anchor on (Inc 2 / World 3). */
+  grip?: boolean;
   // --- added only when its world arrives (the §2.3 "no on-ramps" ledger) ---
-  // grip / heat / trigger / door / pickup / egg are deliberately ABSENT until
-  // the increment that uses them.
+  // heat / trigger / door / pickup / egg are deliberately ABSENT until the
+  // increment that uses them.
 }
 
 /** The preset keys. Grows with each increment that adds an entity. */
-export type EntityKind = "wall" | "fruit" | "exit";
+export type EntityKind = "wall" | "fruit" | "exit" | "anchor";
 
 /**
  * Back-compat alias: level data authors a cell by its preset NAME, which is an
@@ -65,11 +80,15 @@ export const PRESETS: Readonly<Record<EntityKind, Entity>> = Object.freeze({
   wall: Object.freeze<Entity>({ kind: "wall", solid: true, supports: true }),
   fruit: Object.freeze<Entity>({ kind: "fruit", eat: true }),
   exit: Object.freeze<Entity>({ kind: "exit", win: true }),
+  // Inc 2 / World 3: a grip wall. Solid (you cannot walk through it) and a world
+  // support like any wall, but additionally `grip:true` so a segment ON it may be
+  // anchored (an anchored-on-grip segment grounds the snake, §2.5/D25).
+  anchor: Object.freeze<Entity>({ kind: "anchor", solid: true, supports: true, grip: true }),
 });
 
 export interface GameState {
   /** Ordered, head first. */
-  snake: Vec[];
+  snake: Segment[];
   /** Sparse map of "x,y" -> Entity. Absent key === empty air. */
   cells: Map<string, Entity>;
   /** How many cells a single strike launches the head. */
@@ -84,7 +103,8 @@ export interface LevelDef {
   name: string;
   strikeRange: number;
   floorY: number;
-  /** Ordered, head first. */
+  /** Ordered, head first. (A `Vec[]` suffices for authoring; segment state is
+   *  set at runtime, not in the static level.) */
   snake: Vec[];
   /** Cells reference a preset BY NAME (`type`), never a raw entity literal. */
   cells: { x: number; y: number; type: EntityKind }[];

@@ -36,10 +36,47 @@ export function cellAt(s: GameState, v: Vec): Entity | undefined {
   return s.cells.get(key(v));
 }
 
-/** A cell bears weight iff its entity has `supports`. Segments never support
- *  each other (rigid fall). */
+/**
+ * Is a grip surface within reach of `seg` (an orthogonally-adjacent grip cell)?
+ *
+ * NOTE on "on a grip cell" (§2.5/§2.2.4): the HLD prose says a segment grounds
+ * while it "sits on a grip cell", but the frozen `anchor` PRESET is `solid:true`
+ * — a segment can never OCCUPY a solid grip cell. The coherent reading (and the
+ * physical picture of "climb ALONG a grip wall", §2.2.4) is therefore that a
+ * segment grips a grip surface ADJACENT to it. We check the four orthogonal
+ * neighbours, which is what makes the canonical climb (move the head up the wall)
+ * actually work. (Recorded as a blocker/HLD inconsistency in the task report.)
+ */
+export function gripBeside(s: GameState, seg: Vec): boolean {
+  return (
+    cellAt(s, { x: seg.x + 1, y: seg.y })?.grip === true ||
+    cellAt(s, { x: seg.x - 1, y: seg.y })?.grip === true ||
+    cellAt(s, { x: seg.x, y: seg.y + 1 })?.grip === true ||
+    cellAt(s, { x: seg.x, y: seg.y - 1 })?.grip === true
+  );
+}
+
+/**
+ * Is some segment a grounding source this turn?
+ *
+ *   groundingSource(seg) := (world cell BELOW seg has `supports`)
+ *                           OR (seg.anchored AND a grip surface is within reach)
+ *
+ * The first clause is the original world-support rule (a cell you stand on). The
+ * second (Inc 2 / §2.5 / D25) is anchored-on-grip: an anchored segment grounds
+ * the snake — but ONLY while it is currently gripping a grip surface. The stored
+ * `anchored` flag is INTENT; the grip surface is the TRUTH, derived each turn
+ * with no latch — a segment carried off the grip wall stops grounding the snake
+ * (T-ANCHOR-CARRY).
+ *
+ * Segments never support each other (rigid fall); multi-body chains land Inc 4.
+ */
 function isSupported(s: GameState): boolean {
-  return s.snake.some((seg) => cellAt(s, { x: seg.x, y: seg.y - 1 })?.supports === true);
+  return s.snake.some(
+    (seg) =>
+      cellAt(s, { x: seg.x, y: seg.y - 1 })?.supports === true ||
+      (seg.anchored === true && gripBeside(s, seg)),
+  );
 }
 
 function checkWin(s: GameState): GameState {
@@ -91,7 +128,10 @@ export function settle(s: GameState): GameState {
     if (iters++ > cap) {
       throw new Error(`settle exceeded iteration cap ${cap} (non-terminating gravity)`);
     }
-    const snake = cur.snake.map((p) => ({ x: p.x, y: p.y - 1 }));
+    // Drop one cell. Preserve per-segment state (`anchored` travels with the
+    // segment) — a falling segment keeps its intent even though it is no longer
+    // grounding (it is, by definition, not on a grip cell while falling).
+    const snake = cur.snake.map((p) => ({ ...p, y: p.y - 1 }));
     cur = { ...cur, snake };
     if (cur.snake.every((p) => p.y < cur.floorY)) {
       cur = { ...cur, status: "dead" };
@@ -122,6 +162,31 @@ export function strike(s: GameState, dir: Dir): GameState {
   }
   if (!moved) return s;
   return settle(cur);
+}
+
+/**
+ * Toggle the anchor on the segment currently sitting on a `grip` cell (Inc 2,
+ * §2.2.4). This is the ONE verb the game needs beyond move/strike: anchoring is
+ * a choice the player makes about their own body that gravity must read, so it
+ * cannot be board data alone.
+ *
+ * - Picks the FIRST segment (head-first) on a grip cell and flips its `anchored`.
+ * - NO-OP (same reference) if the state is terminal or NO segment is on a grip
+ *   cell (T-ANCHOR-NOOP) — so the shell's `next === state` no-op detection holds.
+ * - Pure: returns a new state with a new snake array; the toggled segment is a
+ *   fresh object, every other segment is shared (unchanged).
+ *
+ * Settle is NOT run here — `anchor` only changes intent; it does not move the
+ * snake. The shell (and the climb sequence) settle via the next move/strike.
+ */
+export function anchor(s: GameState): GameState {
+  if (s.status !== "play") return s;
+  const idx = s.snake.findIndex((seg) => gripBeside(s, seg));
+  if (idx === -1) return s; // no grip surface within reach of any segment: no-op
+  const snake = s.snake.map((seg, i) =>
+    i === idx ? { ...seg, anchored: !seg.anchored } : seg,
+  );
+  return { ...s, snake };
 }
 
 /** Build a live, already-settled GameState from a static level definition.

@@ -1,8 +1,15 @@
-import { buildState, DIRS, move, strike } from "./core/game";
+import { anchor, buildState, DIRS, move, strike } from "./core/game";
 import type { GameState } from "./core/types";
 import { ALL_ROOMS, WORLDS } from "./levels/worlds";
-import type { Input } from "./levels/replay";
+import type { DirName, Input } from "./levels/replay";
 import { Renderer } from "./render/renderer";
+
+// The shell's logged action. `move`/`strike` carry a direction (the replay
+// `Input` shape); `anchor` (Inc 2) is directionless. The input log is a union so
+// the climb protocol (anchor -> move -> re-anchor) round-trips through undo and
+// record-par. (The pure `replay` helper covers the directional verbs; anchor is
+// applied directly by the shell.)
+type LoggedAction = Input | { verb: "anchor" };
 
 const app = document.getElementById("app")!;
 const hud = document.getElementById("hud")!;
@@ -20,7 +27,7 @@ const renderer = new Renderer(app);
 
 let roomIndex = 0;
 let history: GameState[] = [];
-let inputs: Input[] = [];
+let inputs: LoggedAction[] = [];
 let state: GameState;
 
 function room() {
@@ -65,19 +72,31 @@ function render() {
     `<b>COIL</b> &nbsp;·&nbsp; ${world.name} &nbsp;—&nbsp; Room ${roomNo} &nbsp;` +
     `<span class="sub">(${room().id})</span><br>` +
     `${statusLine()}<br><br>` +
-    `<span class="sub">Arrows: move &nbsp;·&nbsp; Shift+Arrow: strike<br>` +
+    `<span class="sub">Arrows: move &nbsp;·&nbsp; Shift+Arrow: strike &nbsp;·&nbsp; A: anchor<br>` +
     `U: undo &nbsp;·&nbsp; R: restart &nbsp;·&nbsp; N: next &nbsp;·&nbsp; drag: orbit<br>` +
     `len ${state.snake.length} &nbsp;·&nbsp; moves ${inputs.length}</span>`;
 }
 
-/** Apply a verb result. No-op (blocked / terminal) returns the same ref. */
-function act(verb: Input["verb"], dirName: Input["dir"]) {
-  const next = (verb === "strike" ? strike : move)(state, DIRS[dirName]);
+/** Commit a verb result. No-op (blocked / terminal) returns the same ref and is
+ *  NOT logged, so the shell's `next === state` no-op detection keeps the undo /
+ *  input-log stacks in lockstep. */
+function commit(next: GameState, action: LoggedAction) {
   if (next === state) return; // blocked / no-op — do not log
   history.push(state);
-  inputs.push({ verb, dir: dirName });
+  inputs.push(action);
   state = next;
   render();
+}
+
+/** A directional verb (move / strike). */
+function act(verb: "move" | "strike", dirName: DirName) {
+  const next = (verb === "strike" ? strike : move)(state, DIRS[dirName]);
+  commit(next, { verb, dir: dirName });
+}
+
+/** The anchor toggle (Inc 2): grip / release the segment beside a grip wall. */
+function anchorAct() {
+  commit(anchor(state), { verb: "anchor" });
 }
 
 function undo() {
@@ -101,7 +120,7 @@ function recordPar() {
   navigator.clipboard?.writeText(json).catch(() => {});
 }
 
-const KEYS: Record<string, Input["dir"]> = {
+const KEYS: Record<string, DirName> = {
   ArrowUp: "up",
   ArrowDown: "down",
   ArrowLeft: "left",
@@ -116,6 +135,9 @@ window.addEventListener("keydown", (e) => {
     return;
   }
   switch (e.key.toLowerCase()) {
+    case "a":
+      anchorAct();
+      break;
     case "u":
       undo();
       break;

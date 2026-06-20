@@ -6,6 +6,9 @@ const COLORS = {
   bg: 0x10141c,
   head: 0xffdd44,
   body: 0x88cc55,
+  /** An anchored segment (gripping a wall) gets a hot accent so the player can
+   *  see which part of the body is holding on (Inc 2). */
+  anchored: 0xff8800,
 };
 
 /** Per-kind visual choice. The renderer reads the entity's `kind` (rules read
@@ -15,6 +18,9 @@ const KIND_STYLE: Record<EntityKind, { color: number; shape: "box" | "sphere"; s
   wall: { color: 0x3a4252, shape: "box", scale: 1 },
   fruit: { color: 0xff5566, shape: "sphere", scale: 0.7 },
   exit: { color: 0x33dd88, shape: "box", scale: 0.9 },
+  // A grip wall: a distinct ridged blue so grippable surfaces read apart from
+  // plain walls (Inc 2 / World 3).
+  anchor: { color: 0x4477cc, shape: "box", scale: 1 },
 };
 const FALLBACK_STYLE = KIND_STYLE.wall;
 
@@ -141,8 +147,11 @@ export class Renderer {
       this.add(x, y, style.color, style.shape, style.scale);
     }
 
-    state.snake.forEach((seg, i) =>
-      this.add(seg.x, seg.y, i === 0 ? COLORS.head : COLORS.body, "box", 0.85),
-    );
+    state.snake.forEach((seg, i) => {
+      // An anchored segment gets the hot accent (it is the one gripping the
+      // wall); otherwise head vs body colouring as before.
+      const color = seg.anchored ? COLORS.anchored : i === 0 ? COLORS.head : COLORS.body;
+      this.add(seg.x, seg.y, color, "box", 0.85);
+    });
   }
 }

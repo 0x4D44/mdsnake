@@ -6,28 +6,35 @@
 // assert `status === 'won'`. The record-par shell tool serializes exactly this
 // shape; here it is the test-side replay counterpart.
 
-import { DIRS, move, strike } from "../core/game";
+import { anchor, DIRS, move, strike } from "../core/game";
 import type { GameState } from "../core/types";
 
 export type DirName = keyof typeof DIRS;
-export type Verb = "move" | "strike";
+export type Verb = "move" | "strike" | "anchor";
 export interface Input {
   verb: Verb;
-  dir: DirName;
+  /** Ignored for the directionless `anchor` toggle. */
+  dir?: DirName;
 }
 export type Solution = Input[];
 
-const VERBS = { move, strike } as const;
-
-/** Replay a recorded input log through the verbs, returning the final state. */
+/** Replay a recorded input log through the verbs, returning the final state.
+ *  `move`/`strike` consume a direction; `anchor` is the directionless toggle
+ *  (HLD §2.2.4) and ignores `dir`. */
 export function replay(start: GameState, solution: Solution): GameState {
   let s = start;
   for (const { verb, dir } of solution) {
-    s = VERBS[verb](s, DIRS[dir]);
+    if (verb === "anchor") {
+      s = anchor(s);
+    } else {
+      s = (verb === "move" ? move : strike)(s, DIRS[dir as DirName]);
+    }
   }
   return s;
 }
 
-/** Convenience for authored solutions: `m("right")`, `k("up")` (k = strike). */
+/** Convenience for authored solutions: `m("right")` move, `k("up")` strike,
+ *  `a()` anchor (directionless). */
 export const m = (dir: DirName): Input => ({ verb: "move", dir });
 export const k = (dir: DirName): Input => ({ verb: "strike", dir });
+export const a = (): Input => ({ verb: "anchor" });
